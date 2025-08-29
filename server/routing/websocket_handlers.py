@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 
 from ..connection import WebSocketMessage, ClientConnection, MessageHandler
 from ..functional.result_monad import Result, Success, Failure
-from ..transcription_service import transcription_service, TranscriptionResult
+from ..providers.transcription_provider import TranscriptionResult
 from ..validation import create_audio_validator
 
 logger = logging.getLogger(__name__)

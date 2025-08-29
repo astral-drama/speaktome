@@ -1,0 +1,16 @@
+{
+    "server_url": "ws://localhost:8000/ws/transcribe",
+    "model": "base",
+    "hotkey": "ctrl+shift+w",
+    "audio_sample_rate": 16000,
+    "audio_channels": 1,
+    "audio_chunk_size": 1024,
+    "audio_input_device": null,
+    "text_add_space_after": true,
+    "text_capitalize_first": true,
+    "text_auto_punctuation": false,
+    "ui_show_notifications": true,
+    "ui_recording_feedback": true,
+    "logging_level": "INFO",
+    "logging_file": null
+}

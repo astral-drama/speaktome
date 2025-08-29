@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from ..functional.result_monad import Result, Success, Failure
 from ..validation import FileValidator, ValidationResult, create_audio_validator
-from ..transcription_service import transcription_service, TranscriptionStatus, TranscriptionResult
+from ..providers.transcription_provider import TranscriptionStatus, TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
