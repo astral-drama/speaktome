@@ -47,6 +47,7 @@ try:
     print()
     print("Features:")
     print("  🔥 Global Hotkeys - Press Ctrl+Shift+W anywhere to record")
+    print("  🖥️  GUI Interface - Visual status and controls (use --gui)")
     print("  🎵 Cross-Platform Audio - Works on macOS, Linux, Windows")
     print("  📝 Text Injection - Types directly into active window")
     print("  ⚡ Real-Time Transcription - WebSocket connection to server")
@@ -90,6 +91,8 @@ except KeyboardInterrupt:
     sys.exit(0)
     
 except Exception as e:
+    import traceback
     print(f"❌ Unexpected error: {e}")
-    print("Check the logs for more details.")
+    print("Full traceback:")
+    traceback.print_exc()
     sys.exit(1)

@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from shared.functional import Result, Success, Failure, setup_logging, merge_configs, validate_required_keys
+from shared.functional import Result, Success, Failure, setup_logging, merge_configs, validate_required_keys, from_callable
 from shared.events import (
     get_event_bus, 
     HotkeyPressedEvent,
@@ -38,6 +38,16 @@ from .providers.transcription_client import TranscriptionClient
 from .providers.text_injection_provider import PyAutoGUIProvider
 from .input.hotkey_handler import PynputHotkeyHandler, HotkeyRegistry
 
+# GUI imports (optional - only imported if GUI is enabled)
+try:
+    import tkinter as tk
+    from .gui import MainWindow, SettingsWindow, HistoryWindow
+    GUI_AVAILABLE = True
+except ImportError:
+    GUI_AVAILABLE = False
+    MainWindow = SettingsWindow = HistoryWindow = None
+    tk = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,10 +59,11 @@ class VoiceClientApplication:
     consistent with the server design philosophy.
     """
     
-    def __init__(self, config: ClientConfig):
+    def __init__(self, config: ClientConfig, show_gui: bool = False):
         self.config = config
         self.running = False
         self.recording_state = False
+        self.show_gui = show_gui
         
         # Initialize container and event bus
         self.container = ClientContainer(config)
@@ -64,6 +75,11 @@ class VoiceClientApplication:
         self.text_injection_provider: Optional[PyAutoGUIProvider] = None
         self.hotkey_registry: Optional[HotkeyRegistry] = None
         self.audio_pipeline = None
+        
+        # GUI components (optional)
+        self.gui_main_window = None
+        self.gui_settings_window = None
+        self.gui_history_window = None
         
         logger.info("Voice client application initialized")
     
@@ -157,10 +173,37 @@ class VoiceClientApplication:
         if start_result.is_failure():
             return start_result
         
+        # Show GUI if enabled
+        if self.show_gui and self.gui_main_window:
+            gui_result = self.show_gui_window()
+            if gui_result.is_failure():
+                logger.warning(f"Failed to show GUI: {gui_result.error}")
+        
         try:
             # Main application loop
-            while self.running:
-                await asyncio.sleep(0.1)
+            if self.show_gui and self.gui_main_window:
+                # GUI mode - run Tkinter mainloop in main thread
+                # Use asyncio with tkinter integration
+                while self.running:
+                    # Process tkinter events
+                    if self.gui_main_window.root:
+                        try:
+                            self.gui_main_window.root.update()
+                            # Check if GUI window was closed
+                            if not self.gui_main_window.is_running:
+                                logger.info("GUI window closed, stopping application")
+                                self.running = False
+                                break
+                        except tk.TclError:
+                            # Window was closed
+                            logger.info("GUI window destroyed, stopping application")
+                            self.running = False
+                            break
+                    await asyncio.sleep(0.01)  # 100 FPS for smooth GUI
+            else:
+                # Headless mode - simple loop
+                while self.running:
+                    await asyncio.sleep(0.1)
                 
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received")
@@ -215,6 +258,13 @@ class VoiceClientApplication:
             # Initialize audio pipeline
             self.audio_pipeline = create_basic_pipeline()
             
+            # Initialize GUI components if requested
+            if self.show_gui:
+                gui_init_result = self._initialize_gui()
+                if gui_init_result.is_failure():
+                    logger.warning(f"GUI initialization failed: {gui_init_result.error}")
+                    # Don't fail the entire app if GUI fails
+            
             logger.info("All components initialized successfully")
             return Success(None)
             
@@ -249,7 +299,9 @@ class VoiceClientApplication:
         
         @async_event_handler("hotkey.pressed")
         async def handle_hotkey_pressed(event: HotkeyPressedEvent) -> Result[None, Exception]:
-            logger.debug(f"Hotkey pressed: {event.hotkey_combination}")
+            logger.info(f"🔥 Hotkey pressed: {event.hotkey_combination} (source: {event.source})")
+            # Trigger recording toggle
+            await self._toggle_recording()
             return Success(None)
         
         @async_event_handler("recording.started")
@@ -273,8 +325,8 @@ class VoiceClientApplication:
         async def handle_transcription_received(event: TranscriptionReceivedEvent) -> Result[None, Exception]:
             logger.info(f"📝 Transcription: '{event.text}' ({event.processing_time:.3f}s)")
             
-            # Inject text into active window
-            if self.text_injection_provider and event.text.strip():
+            # Inject text into active window (only in headless mode, not GUI mode)
+            if self.text_injection_provider and event.text.strip() and not self.show_gui:
                 await self.text_injection_provider.inject_text(event.text)
             
             return Success(None)
@@ -339,10 +391,27 @@ class VoiceClientApplication:
                         
                         if transcription_result.is_failure():
                             logger.error(f"Transcription failed: {transcription_result.error}")
+                            # Publish error event to notify GUI
+                            from shared.events import ErrorEvent
+                            await self.event_bus.publish(ErrorEvent(
+                                error_message=f"Transcription failed: {transcription_result.error}",
+                                error_type="transcription_error",
+                                source="voice_client_app"
+                            ))
+                        else:
+                            logger.info(f"📝 Transcription successful: '{transcription_result.value}'")
+                            # The transcription_client should handle publishing TranscriptionReceivedEvent
                     else:
                         logger.error("Transcription client not available")
                 else:
                     logger.error(f"Audio pipeline failed: {pipeline_result.error}")
+                    # Publish error event to notify GUI
+                    from shared.events import ErrorEvent
+                    await self.event_bus.publish(ErrorEvent(
+                        error_message=f"Audio pipeline failed: {pipeline_result.error}",
+                        error_type="pipeline_error",
+                        source="voice_client_app"
+                    ))
             else:
                 logger.error(f"Failed to stop recording: {result.error}")
         else:
@@ -368,7 +437,104 @@ class VoiceClientApplication:
         if self.container:
             await self.container.cleanup_services()
         
+        # Cleanup GUI if present
+        if self.gui_main_window:
+            self.gui_main_window.destroy()
+        if self.gui_settings_window:
+            self.gui_settings_window.destroy()
+        if self.gui_history_window:
+            self.gui_history_window.destroy()
+        
         logger.info("Component cleanup completed")
+    
+    def _initialize_gui(self) -> Result[None, Exception]:
+        """Initialize GUI components"""
+        if not GUI_AVAILABLE:
+            return Failure(Exception("GUI components not available - tkinter not installed"))
+        
+        try:
+            # Create main window
+            self.gui_main_window = MainWindow(self.event_bus, self.config.__dict__)
+            gui_init_result = self.gui_main_window.initialize()
+            if gui_init_result.is_failure():
+                return gui_init_result
+            
+            # Create settings window
+            self.gui_settings_window = SettingsWindow(
+                self.event_bus, 
+                self.config.__dict__,
+                on_settings_changed=self._on_gui_settings_changed
+            )
+            
+            # Create history window  
+            self.gui_history_window = HistoryWindow(self.event_bus)
+            
+            # Connect history window to main window
+            self.gui_main_window.history_window = self.gui_history_window
+            
+            # Subscribe to transcription events to update history
+            self.event_bus.subscribe("transcription.received", self._handle_gui_transcription)
+            
+            logger.info("GUI components initialized")
+            return Success(None)
+            
+        except Exception as e:
+            logger.error(f"GUI initialization failed: {e}")
+            return Failure(e)
+    
+    def _handle_gui_transcription(self, event: TranscriptionReceivedEvent) -> Result[None, Exception]:
+        """Handle transcription for GUI history"""
+        if self.gui_history_window:
+            self.gui_history_window.add_transcription(
+                event.text, 
+                {
+                    'language': event.language,
+                    'processing_time': event.processing_time,
+                    'confidence': event.confidence
+                }
+            )
+        return Success(None)
+    
+    def _on_gui_settings_changed(self, new_settings: Dict[str, Any]) -> None:
+        """Handle settings changes from GUI"""
+        # Update config
+        for key, value in new_settings.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, value)
+        
+        # Apply hotkey changes if needed
+        if 'hotkey' in new_settings and self.hotkey_registry:
+            # Re-register hotkey
+            asyncio.create_task(self._reregister_hotkey(new_settings['hotkey']))
+        
+        logger.info(f"Settings updated from GUI: {list(new_settings.keys())}")
+    
+    async def _reregister_hotkey(self, new_hotkey: str) -> None:
+        """Re-register hotkey with new combination"""
+        if self.hotkey_registry:
+            # Unregister old hotkey
+            await self.hotkey_registry.unregister_voice_trigger()
+            
+            # Register new hotkey
+            register_result = await self.hotkey_registry.register_voice_trigger(new_hotkey)
+            if register_result.is_success():
+                logger.info(f"Hotkey updated to: {new_hotkey}")
+            else:
+                logger.error(f"Failed to register new hotkey: {register_result.error}")
+    
+    def show_gui_window(self) -> Result[None, Exception]:
+        """Show the GUI window"""
+        if not self.gui_main_window:
+            return Failure(Exception("GUI not initialized"))
+        
+        return self.gui_main_window.show()
+    
+    def hide_gui_window(self) -> Result[None, Exception]:
+        """Hide the GUI window"""
+        if not self.gui_main_window:
+            return Success(None)
+        
+        return self.gui_main_window.hide()
     
     def _setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown"""
@@ -453,6 +619,18 @@ async def main():
         default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
+    parser.add_argument(
+        "--gui",
+        help="Show GUI window",
+        action="store_true",
+        default=False
+    )
+    parser.add_argument(
+        "--headless",
+        help="Run in headless mode (no GUI)",
+        action="store_true", 
+        default=False
+    )
     
     args = parser.parse_args()
     
@@ -477,8 +655,14 @@ async def main():
     if args.log_level:
         config.logging_level = args.log_level
     
+    # Determine GUI mode
+    show_gui = args.gui and not args.headless
+    if args.gui and args.headless:
+        print("⚠️ Warning: Both --gui and --headless specified. Using headless mode.")
+        show_gui = False
+    
     # Create and run application
-    app = VoiceClientApplication(config)
+    app = VoiceClientApplication(config, show_gui=show_gui)
     
     try:
         result = await app.run()

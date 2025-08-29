@@ -9,6 +9,7 @@ Functional audio recording provider matching server architecture patterns.
 import asyncio
 import logging
 import time
+import threading
 import wave
 import tempfile
 import os
@@ -131,6 +132,12 @@ class PyAudioProvider(AudioProvider):
             )
             
             self._is_recording = True
+            
+            # Start background thread to read audio data
+            import threading
+            self._recording_thread = threading.Thread(target=self._read_audio_data)
+            self._recording_thread.daemon = True
+            self._recording_thread.start()
         
         result = from_callable(_start_recording)
         
@@ -155,13 +162,18 @@ class PyAudioProvider(AudioProvider):
             return Failure(Exception("Not currently recording"))
         
         def _stop_recording() -> AudioData:
+            # Stop recording (this will cause the background thread to exit)
+            self._is_recording = False
+            
+            # Wait for the background thread to finish
+            if hasattr(self, '_recording_thread') and self._recording_thread.is_alive():
+                self._recording_thread.join(timeout=1.0)
+            
             # Stop the stream
             if self.stream:
                 self.stream.stop_stream()
                 self.stream.close()
                 self.stream = None
-            
-            self._is_recording = False
             
             # Calculate duration
             duration = time.time() - (self._recording_start_time or time.time())
@@ -199,6 +211,21 @@ class PyAudioProvider(AudioProvider):
             logger.error(f"Failed to stop recording: {result.error}")
         
         return result
+    
+    def _read_audio_data(self):
+        """Background thread method to continuously read audio data"""
+        while self._is_recording and self.stream:
+            try:
+                # Read audio data from stream
+                data = self.stream.read(self.chunk_size, exception_on_overflow=False)
+                if data:
+                    self.frames.append(data)
+                else:
+                    # No data available, small sleep to prevent busy waiting
+                    time.sleep(0.01)
+            except Exception as e:
+                logger.error(f"Error reading audio data: {e}")
+                break
     
     def is_recording(self) -> bool:
         """Check if currently recording"""

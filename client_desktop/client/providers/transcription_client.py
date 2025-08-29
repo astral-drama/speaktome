@@ -54,7 +54,6 @@ class TranscriptionClient:
             try:
                 self.websocket = await websockets.connect(
                     self.server_url,
-                    timeout=10.0,
                     max_size=10**7  # 10MB max message size for audio
                 )
                 
@@ -126,39 +125,47 @@ class TranscriptionClient:
             await self.websocket.send(json.dumps(request))
             logger.debug(f"Sent transcription request: {len(audio_data.data)} bytes, model={model}")
             
-            # Wait for response with timeout
+            # Wait for response with timeout - may need to skip connection messages
             try:
-                response_str = await asyncio.wait_for(
-                    self.websocket.recv(),
-                    timeout=30.0  # 30 second timeout for transcription
-                )
-                
-                response = json.loads(response_str)
-                
-                if response.get("type") == "transcription":
-                    text = response.get("text", "").strip()
-                    processing_time = response.get("processing_time", 0.0)
-                    detected_language = response.get("language", language)
-                    confidence = response.get("confidence")
+                while True:
+                    response_str = await asyncio.wait_for(
+                        self.websocket.recv(),
+                        timeout=30.0  # 30 second timeout for transcription
+                    )
                     
-                    # Publish transcription received event
-                    await self.event_bus.publish(TranscriptionReceivedEvent(
-                        text=text,
+                    response = json.loads(response_str)
+                    logger.info(f"Received WebSocket response: {response}")
+                    
+                    # Skip connection status messages and wait for transcription
+                    if response.get("type") == "connection":
+                        logger.info("Skipping connection message, waiting for transcription...")
+                        continue
+                    
+                    # Process transcription response
+                    if response.get("type") == "transcription":
+                        text = response.get("text", "").strip()
+                        processing_time = response.get("processing_time", 0.0)
+                        detected_language = response.get("language", language)
+                        confidence = response.get("confidence")
+                        
+                        # Publish transcription received event
+                        await self.event_bus.publish(TranscriptionReceivedEvent(
+                            text=text,
                         language=detected_language,
                         processing_time=processing_time,
                         confidence=confidence,
                         source="transcription_client"
-                    ))
-                    
-                    logger.info(f"Transcription received: '{text[:50]}...' in {processing_time:.3f}s")
-                    return text
-                    
-                elif response.get("type") == "error":
-                    error_message = response.get("message", "Unknown transcription error")
-                    raise Exception(f"Server error: {error_message}")
-                    
-                else:
-                    raise Exception(f"Unexpected response type: {response.get('type')}")
+                        ))
+                        
+                        logger.info(f"Transcription received: '{text[:50]}...' in {processing_time:.3f}s")
+                        return text
+                        
+                    elif response.get("type") == "error":
+                        error_message = response.get("message", "Unknown transcription error")
+                        raise Exception(f"Server error: {error_message}")
+                        
+                    else:
+                        raise Exception(f"Unexpected response type: {response.get('type')}")
                     
             except asyncio.TimeoutError:
                 raise Exception("Transcription request timed out")
