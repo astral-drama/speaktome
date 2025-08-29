@@ -1,0 +1,12 @@
+# Web server dependencies (in addition to existing requirements.txt)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+python-multipart>=0.0.6
+aiofiles>=23.0.0
+pydantic>=2.4.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+jinja2>=3.1.0
+aioredis>=2.0.0
+asyncio-mqtt>=0.16.0
