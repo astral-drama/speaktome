@@ -705,8 +705,10 @@ class VoiceClientApplication:
         
         # Apply hotkey changes if needed
         if 'hotkey' in new_settings and self.hotkey_registry:
+            logger.info(f"Hotkey change detected: {new_settings['hotkey']}")
             # Re-register hotkey
-            asyncio.create_task(self._reregister_hotkey(new_settings['hotkey']))
+            task = asyncio.create_task(self._reregister_hotkey(new_settings['hotkey']))
+            logger.info("Hotkey re-registration task created")
         
         # Apply server URL changes
         if 'server_url' in new_settings and self.transcription_client:
@@ -725,21 +727,39 @@ class VoiceClientApplication:
     
     async def _reregister_hotkey(self, new_hotkey: str) -> None:
         """Re-register hotkey with new combination"""
+        logger.info(f"_reregister_hotkey called with: {new_hotkey}")
+        
         if self.hotkey_registry:
+            logger.info("Hotkey registry available, starting re-registration...")
+            
+            # Show current registered hotkeys before unregistering
+            current_hotkeys = self.hotkey_registry.get_registered_combinations()
+            logger.info(f"Current registered hotkeys: {list(current_hotkeys.keys())}")
+            
             # Unregister all old hotkeys
+            logger.info("Unregistering old hotkeys...")
             unregister_result = await self.hotkey_registry.unregister_all()
             if unregister_result.is_failure():
                 logger.warning(f"Failed to unregister old hotkeys: {unregister_result.error}")
+            else:
+                logger.info("Successfully unregistered old hotkeys")
             
             # Register new hotkey with the same callback as original setup
+            logger.info(f"Registering new hotkey: {new_hotkey}")
             register_result = await self.hotkey_registry.register_voice_trigger(
                 new_hotkey, 
                 self._handle_voice_hotkey
             )
             if register_result.is_success():
-                logger.info(f"Hotkey updated to: {new_hotkey}")
+                logger.info(f"✅ Hotkey successfully updated to: {new_hotkey}")
+                
+                # Verify registration
+                updated_hotkeys = self.hotkey_registry.get_registered_combinations()
+                logger.info(f"Verified registered hotkeys: {list(updated_hotkeys.keys())}")
             else:
-                logger.error(f"Failed to register new hotkey: {register_result.error}")
+                logger.error(f"❌ Failed to register new hotkey: {register_result.error}")
+        else:
+            logger.error("❌ Hotkey registry not available!")
     
     def show_gui_window(self) -> Result[None, Exception]:
         """Show the GUI window"""

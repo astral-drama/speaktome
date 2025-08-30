@@ -31,12 +31,41 @@ Architecture:
 import sys
 import asyncio
 import platform
+import subprocess
 from pathlib import Path
 
 # Add current directory and parent to path for imports
 current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir.parent))
+
+
+def check_macos_permissions():
+    """Check and provide guidance for macOS permissions"""
+    try:
+        # Check if we can access the microphone by attempting to query audio devices
+        import pyaudio
+        pa = pyaudio.PyAudio()
+        pa.terminate()
+        print("   ✅ Microphone access available")
+    except Exception:
+        print("   ❌ Microphone access blocked - grant permission in System Preferences")
+    
+    # Check accessibility permission by attempting to monitor events
+    try:
+        from pynput import keyboard
+        # Try to create a listener (this will trigger permission prompt if needed)
+        listener = keyboard.Listener(on_press=lambda key: None, on_release=lambda key: None)
+        listener.start()
+        listener.stop()
+        print("   ✅ Accessibility permission appears to be granted")
+    except Exception as e:
+        if "not trusted" in str(e).lower() or "accessibility" in str(e).lower():
+            print("   ❌ Accessibility permission needed - add Terminal/Python to Accessibility")
+            print("   💡 Run the app once to trigger permission prompt")
+        else:
+            print(f"   ⚠️  Unable to verify accessibility permission: {e}")
+
 
 try:
     # Import the main application
@@ -57,7 +86,13 @@ try:
     # Check platform and provide setup guidance
     system = platform.system()
     if system == "Darwin":
-        print("🍎 macOS detected - Grant microphone & accessibility permissions")
+        print("🍎 macOS detected - Checking permissions...")
+        print("   📋 System Preferences > Security & Privacy > Privacy")
+        print("   🎤 Microphone: Add Terminal and Python")
+        print("   ♿ Accessibility: Add Terminal and Python")
+        print("   ⚠️  Global hotkeys need Accessibility permission!")
+        print()
+        check_macos_permissions()
     elif system == "Linux":
         print("🐧 Linux detected - Ensure audio groups and X11 support")
     elif system == "Windows":

@@ -8,6 +8,7 @@ Global hotkey detection using functional patterns and event-driven architecture.
 
 import asyncio
 import logging
+import platform
 import threading
 from typing import List, Dict, Any, Optional, Callable
 from abc import ABC, abstractmethod
@@ -84,8 +85,19 @@ class PynputHotkeyHandler(HotkeyHandler):
                 logger.info(f"Listener daemon status: {self.listener.daemon}")
                 logger.info(f"Listener running: {self.listener.running}")
                 
+                # Check for macOS accessibility permission warning
+                if platform.system() == "Darwin":
+                    # Give the listener a moment to initialize and potentially show warnings
+                    import time
+                    time.sleep(0.1)
+                    if not self.listener.running:
+                        logger.warning("⚠️  Hotkey listener not running - may need macOS Accessibility permission")
+                
             except Exception as e:
                 logger.error(f"Failed to start global hotkey listener: {e}")
+                if platform.system() == "Darwin" and "accessibility" in str(e).lower():
+                    logger.error("🍎 macOS: Grant Accessibility permission to enable global hotkeys")
+                    logger.error("   System Preferences > Security & Privacy > Privacy > Accessibility")
                 raise
         
         return from_callable(_initialize).map(lambda _: None)
@@ -106,7 +118,7 @@ class PynputHotkeyHandler(HotkeyHandler):
             self.hotkeys[combination] = hotkey
             self.callbacks[combination] = callback
             
-            logger.info(f"Hotkey registered: {combination}")
+            logger.info(f"Hotkey registered: {combination} with key_combo: {key_combo}")
         
         result = from_callable(_register)
         
@@ -136,11 +148,14 @@ class PynputHotkeyHandler(HotkeyHandler):
             key_str = key_str.strip()
             
             if key_str == 'ctrl':
-                key_combo.append(Key.ctrl_l)
+                # Use Key.ctrl which matches both left and right ctrl
+                key_combo.append(Key.ctrl)
             elif key_str == 'shift':
-                key_combo.append(Key.shift_l)
+                # Use Key.shift which matches both left and right shift  
+                key_combo.append(Key.shift)
             elif key_str == 'alt':
-                key_combo.append(Key.alt_l)
+                # Use Key.alt which matches both left and right alt
+                key_combo.append(Key.alt)
             elif key_str == 'cmd':
                 key_combo.append(Key.cmd)
             elif key_str == 'space':
@@ -209,11 +224,13 @@ class PynputHotkeyHandler(HotkeyHandler):
     
     def _on_key_press(self, key):
         """Handle key press events"""
+        logger.debug(f"Key pressed: {key} (type: {type(key)})")
         for hotkey in self.hotkeys.values():
             hotkey.press(key)
     
     def _on_key_release(self, key):
-        """Handle key release events"""
+        """Handle key release events"""  
+        logger.debug(f"Key released: {key} (type: {type(key)})")
         for hotkey in self.hotkeys.values():
             hotkey.release(key)
     

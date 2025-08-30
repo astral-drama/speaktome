@@ -698,6 +698,8 @@ class MainWindow:
             # Convert hotkey format for tkinter (ctrl+shift+r -> <Control-Shift-r>)
             tk_hotkey = self._convert_hotkey_to_tk_format(hotkey)
             
+            logger.info(f"Converting hotkey '{hotkey}' to tkinter format: '{tk_hotkey}'")
+            
             # Bind the hotkey to the main window
             self.root.bind_all(tk_hotkey, self._on_gui_hotkey)
             
@@ -721,15 +723,16 @@ class MainWindow:
             elif part == 'cmd' or part == 'meta':
                 tk_parts.append('Meta')
             else:
-                # Last part is the key
-                tk_parts.append(part.upper())
+                # Last part is the key - keep lowercase for regular letters
+                tk_parts.append(part.lower())
                 
         return f"<{'-'.join(tk_parts)}>"
     
     def _on_gui_hotkey(self, event) -> None:
         """Handle GUI hotkey press (when window has focus)"""
         try:
-            logger.debug("GUI hotkey triggered (window focused)")
+            logger.info(f"GUI hotkey triggered (window focused) - event: {event}")
+            logger.info(f"Event details - keysym: {event.keysym}, state: {event.state}, keycode: {event.keycode}")
             
             # Publish hotkey pressed event (same as global hotkey)
             # Get current hotkey from settings (live reload) or fallback to config  
