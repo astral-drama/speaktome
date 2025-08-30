@@ -39,9 +39,10 @@ class MainWindow:
     - Compact, always-on-top design
     """
     
-    def __init__(self, event_bus: EventBus, config: Dict[str, Any]):
+    def __init__(self, event_bus: EventBus, config: Dict[str, Any], settings_manager=None):
         self.event_bus = event_bus
         self.config = config
+        self.settings_manager = settings_manager
         self.root: Optional[tk.Tk] = None
         self.is_running = False
         
@@ -96,11 +97,13 @@ class MainWindow:
     
     def _handle_recording_started(self, event: RecordingStartedEvent) -> Result[None, Exception]:
         """Handle recording started"""
+        logger.debug(f"GUI received RecordingStartedEvent: {event}")
         self._queue_gui_update(lambda: self._update_recording_state("recording"))
         return Success(None)
     
     def _handle_recording_stopped(self, event: RecordingStoppedEvent) -> Result[None, Exception]:
         """Handle recording stopped"""  
+        logger.debug(f"GUI received RecordingStoppedEvent: {event}")
         self._queue_gui_update(lambda: self._update_recording_state("processing"))
         return Success(None)
     
@@ -111,6 +114,7 @@ class MainWindow:
     
     def _queue_gui_update(self, update_func: Callable) -> None:
         """Queue a GUI update for thread-safe execution"""
+        logger.debug("Queuing GUI update")
         self.gui_queue.put(update_func)
     
     def show(self) -> Result[None, Exception]:
@@ -148,106 +152,55 @@ class MainWindow:
         """Create the main GUI window"""
         self.root = tk.Tk()
         self.root.title("SpeakToMe Voice Client")
-        self.root.geometry("400x300")
-        self.root.resizable(False, False)
+        self.root.geometry("500x400")
+        self.root.resizable(True, True)
+        self.root.minsize(450, 350)  # Set minimum size
         
-        # Keep window on top
-        self.root.attributes('-topmost', True)
+        # Keep window on top (can be toggled)
+        self.always_on_top = True
+        self.root.attributes('-topmost', self.always_on_top)
         
         # Configure window close behavior
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
         
         self._create_widgets()
         self._setup_layout()
+        self._setup_gui_hotkeys()
         
         logger.info("Main GUI window created")
     
     def _create_widgets(self) -> None:
-        """Create all GUI widgets"""
-        # Header frame
-        header_frame = ttk.Frame(self.root)
+        """Create all GUI widgets using functional composition"""
+        # Compose UI sections using pure functions
+        header_widgets = self._create_header_widgets()
+        instruction_widgets = self._create_instruction_widgets()
+        control_widgets = self._create_control_widgets()
+        transcription_widgets = self._create_transcription_widgets()
+        history_control_widgets = self._create_history_control_widgets(transcription_widgets['transcription_frame'])
         
-        # Title
-        title_label = ttk.Label(header_frame, text="🎤 SpeakToMe", font=('Arial', 14, 'bold'))
+        # Store widget references (preserving original interface)
+        self.header_frame = header_widgets['header_frame']
+        self.title_label = header_widgets['title_label']
+        self.connection_indicator = header_widgets['connection_indicator']
+        self.status_label = header_widgets['status_label']
         
-        # Connection status
-        self.connection_indicator = ttk.Label(header_frame, text="●", foreground="red")
-        self.status_label = ttk.Label(header_frame, text="Disconnected", font=('Arial', 9))
+        self.instruction_frame = instruction_widgets['instruction_frame']
+        self.instruction_label = instruction_widgets['instruction_label']
         
-        # Control frame  
-        control_frame = ttk.Frame(self.root)
+        self.control_frame = control_widgets['control_frame']
+        self.record_button = control_widgets['record_button']
+        self.settings_button = control_widgets['settings_button']
+        self.topmost_button = control_widgets['topmost_button']
         
-        # Record button
-        self.record_button = ttk.Button(
-            control_frame,
-            text="🎙️ Start Recording", 
-            command=self._toggle_recording,
-            width=20
-        )
+        self.transcription_frame = transcription_widgets['transcription_frame']
+        self.history_listbox_frame = transcription_widgets['history_listbox_frame']
+        self.history_listbox = transcription_widgets['history_listbox']
+        self.history_scrollbar = transcription_widgets['history_scrollbar']
         
-        # Settings button
-        settings_button = ttk.Button(
-            control_frame,
-            text="⚙️ Settings",
-            command=self._show_settings,
-            width=15
-        )
-        
-        # Transcription frame
-        transcription_frame = ttk.LabelFrame(self.root, text="Transcription History", padding=10)
-        
-        # History listbox with scrollbar
-        history_listbox_frame = ttk.Frame(transcription_frame)
-        
-        self.history_listbox = tk.Listbox(
-            history_listbox_frame,
-            height=8,
-            width=60,
-            font=('Arial', 9),
-            selectmode=tk.SINGLE
-        )
-        
-        # Bind selection event
-        self.history_listbox.bind('<<ListboxSelect>>', self._on_history_select)
-        
-        # Scrollbar for history listbox
-        history_scrollbar = ttk.Scrollbar(history_listbox_frame, orient="vertical", command=self.history_listbox.yview)
-        self.history_listbox.configure(yscrollcommand=history_scrollbar.set)
-        
-        # History control buttons
-        history_button_frame = ttk.Frame(transcription_frame)
-        
-        # Copy selected button
-        self.copy_selected_button = ttk.Button(
-            history_button_frame,
-            text="📋 Copy Selected",
-            command=self._copy_selected_transcription,
-            state=tk.DISABLED
-        )
-        
-        # View all history button  
-        self.view_all_button = ttk.Button(
-            history_button_frame,
-            text="📚 View All History",
-            command=self._show_full_history
-        )
-        
-        # Clear history button
-        self.clear_history_button = ttk.Button(
-            history_button_frame,
-            text="🗑️ Clear History", 
-            command=self._clear_transcription_history
-        )
-        
-        # Store widget references
-        self.header_frame = header_frame
-        self.title_label = title_label
-        self.control_frame = control_frame
-        self.settings_button = settings_button
-        self.transcription_frame = transcription_frame
-        self.history_listbox_frame = history_listbox_frame
-        self.history_scrollbar = history_scrollbar
-        self.history_button_frame = history_button_frame
+        self.history_button_frame = history_control_widgets['history_button_frame']
+        self.copy_selected_button = history_control_widgets['copy_selected_button']
+        self.view_all_button = history_control_widgets['view_all_button']
+        self.clear_history_button = history_control_widgets['clear_history_button']
     
     def _setup_layout(self) -> None:
         """Setup widget layout"""
@@ -257,10 +210,15 @@ class MainWindow:
         self.status_label.pack(side=tk.RIGHT)
         self.connection_indicator.pack(side=tk.RIGHT, padx=(0, 5))
         
+        # Instruction layout
+        self.instruction_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.instruction_label.pack()
+        
         # Control layout
         self.control_frame.pack(fill=tk.X, padx=10, pady=5)
         self.record_button.pack(side=tk.LEFT, padx=(0, 10))
-        self.settings_button.pack(side=tk.LEFT)
+        self.settings_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.topmost_button.pack(side=tk.LEFT)
         
         # Transcription layout
         self.transcription_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -278,12 +236,17 @@ class MainWindow:
     
     def _process_gui_updates(self) -> None:
         """Process queued GUI updates"""
+        processed = 0
         try:
             while True:
                 update_func = self.gui_queue.get_nowait()
                 update_func()
+                processed += 1
         except queue.Empty:
             pass
+        
+        if processed > 0:
+            logger.debug(f"Processed {processed} GUI updates")
         
         # Schedule next update check
         if self.is_running and self.root:
@@ -308,16 +271,20 @@ class MainWindow:
     
     def _update_recording_state(self, state: str) -> None:
         """Update recording state display"""
+        logger.debug(f"Updating recording state: {self.recording_state} -> {state}")
         self.recording_state = state
         
         if state == "recording":
             self.record_button.config(text="🛑 Stop Recording", style="Accent.TButton")
+            logger.debug("Button updated to 'Stop Recording'")
         elif state == "processing":
             self.record_button.config(text="⏳ Processing...", state=tk.DISABLED)
+            logger.debug("Button updated to 'Processing...'")
         else:
             self.record_button.config(text="🎙️ Start Recording", state=tk.NORMAL)
             # Reset button style
             self.record_button.config(style="TButton")
+            logger.debug("Button updated to 'Start Recording'")
     
     def _update_transcription(self, text: str) -> None:
         """Update transcription display"""
@@ -349,160 +316,310 @@ class MainWindow:
         self._update_recording_state("ready")
     
     def _toggle_recording(self) -> None:
-        """Toggle recording state"""
+        """Toggle recording state using functional composition"""
         logger.info(f"GUI button clicked - current recording_state: {self.recording_state}")
         
+        # Determine recording action based on current state
+        hotkey = self.config.get('hotkey', 'ctrl+shift+w')
+        
         if self.recording_state == "ready":
-            # Start recording - this would trigger hotkey press event
-            from shared.events import HotkeyPressedEvent
-            event = HotkeyPressedEvent(
-                hotkey_combination=self.config.get('hotkey', 'ctrl+shift+w'),
-                is_recording_start=True,
-                source="gui_button"
-            )
-            logger.info(f"Publishing start recording event: {event}")
-            
-            # Use asyncio.create_task directly (similar to hotkey handler)
-            try:
-                asyncio.create_task(self.event_bus.publish(event))
-                logger.info("Start recording event published successfully")
-            except Exception as e:
-                logger.error(f"Failed to publish start recording event: {e}")
+            is_recording_start = True
+            action = "start"
         elif self.recording_state == "recording":
-            # Stop recording
-            from shared.events import HotkeyPressedEvent  
-            event = HotkeyPressedEvent(
-                hotkey_combination=self.config.get('hotkey', 'ctrl+shift+w'), 
-                is_recording_start=False,
-                source="gui_button"
-            )
-            logger.info(f"Publishing stop recording event: {event}")
-            
-            # Use asyncio.create_task directly (similar to hotkey handler)
-            try:
-                asyncio.create_task(self.event_bus.publish(event))
-                logger.info("Stop recording event published successfully")
-            except Exception as e:
-                logger.error(f"Failed to publish stop recording event: {e}")
-    
-    def _copy_selected_transcription(self) -> None:
-        """Copy selected transcription to clipboard"""
-        selection = self.history_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a transcription to copy.")
+            is_recording_start = False  
+            action = "stop"
+        else:
+            logger.warning(f"Cannot toggle recording from state: {self.recording_state}")
             return
         
-        # Get the selected index (remembering newest is at top)
-        selected_index = selection[0]
-        logger.info(f"Selected listbox index: {selected_index}")
-        logger.info(f"Total transcription_history entries: {len(self.transcription_history)}")
+        # Use functional composition to create and publish event
+        result = (
+            MainWindow._create_hotkey_event(hotkey, is_recording_start, "gui_button")
+            .flat_map(lambda event: self._publish_event_async(event))
+        )
         
-        # DEBUG: Show what the listbox actually contains at this index
-        try:
-            listbox_text = self.history_listbox.get(selected_index)
-            logger.info(f"DEBUG: Listbox text at index {selected_index}: '{listbox_text}'")
-        except Exception as e:
-            logger.error(f"Could not get listbox text: {e}")
+        if result.is_failure():
+            logger.error(f"Failed to {action} recording: {result.error}")
+    
+    # Pure UI builder functions (functional composition)
+    def _create_header_widgets(self) -> Dict[str, Any]:
+        """Pure function to create header widgets"""
+        header_frame = ttk.Frame(self.root)
+        title_label = ttk.Label(header_frame, text="🎤 SpeakToMe", font=('Arial', 14, 'bold'))
+        connection_indicator = ttk.Label(header_frame, text="●", foreground="red")
+        status_label = ttk.Label(header_frame, text="Disconnected", font=('Arial', 9))
         
-        if selected_index < len(self.transcription_history):
-            # History is stored oldest-first, but displayed newest-first
-            history_index = len(self.transcription_history) - 1 - selected_index
-            logger.info(f"Calculated history_index: {history_index}")
-            
-            # Debug: show what's in the transcription_history at this index
-            if 0 <= history_index < len(self.transcription_history):
-                entry = self.transcription_history[history_index]
-                logger.info(f"Transcription entry at history_index {history_index}: {entry}")
-                selected_text = entry['text']
-                logger.info(f"DEBUG: Original text from history: '{selected_text}'")
-                logger.info(f"DEBUG: Does original text contain brackets? {('[' in selected_text or ']' in selected_text)}")
+        return {
+            'header_frame': header_frame,
+            'title_label': title_label,
+            'connection_indicator': connection_indicator,
+            'status_label': status_label
+        }
+    
+    def _create_instruction_widgets(self) -> Dict[str, Any]:
+        """Pure function to create instruction widgets with hotkey display"""
+        instruction_frame = ttk.Frame(self.root)
+        
+        # Get hotkey with functional composition
+        hotkey = self._get_current_hotkey()
+        hotkey_display = self._format_hotkey_display(hotkey)
+        
+        instruction_label = ttk.Label(
+            instruction_frame,
+            text=f"💡 Focus here, press {hotkey_display} to record → text auto-types where you were!",
+            font=('Arial', 9),
+            foreground="blue"
+        )
+        
+        return {
+            'instruction_frame': instruction_frame,
+            'instruction_label': instruction_label
+        }
+    
+    def _create_control_widgets(self) -> Dict[str, Any]:
+        """Pure function to create control button widgets"""
+        control_frame = ttk.Frame(self.root)
+        
+        record_button = ttk.Button(
+            control_frame,
+            text="🎙️ Start Recording",
+            command=self._toggle_recording,
+            width=20
+        )
+        
+        settings_button = ttk.Button(
+            control_frame,
+            text="⚙️ Settings",
+            command=self._show_settings,
+            width=15
+        )
+        
+        topmost_button = ttk.Button(
+            control_frame,
+            text="📌 On Top",
+            command=self._toggle_always_on_top,
+            width=12
+        )
+        
+        return {
+            'control_frame': control_frame,
+            'record_button': record_button,
+            'settings_button': settings_button,
+            'topmost_button': topmost_button
+        }
+    
+    def _create_transcription_widgets(self) -> Dict[str, Any]:
+        """Pure function to create transcription history widgets"""
+        transcription_frame = ttk.LabelFrame(self.root, text="Transcription History", padding=10)
+        history_listbox_frame = ttk.Frame(transcription_frame)
+        
+        history_listbox = tk.Listbox(
+            history_listbox_frame,
+            height=8,
+            width=60,
+            font=('Arial', 9),
+            selectmode=tk.SINGLE
+        )
+        history_listbox.bind('<<ListboxSelect>>', self._on_history_select)
+        
+        history_scrollbar = ttk.Scrollbar(history_listbox_frame, orient="vertical", command=history_listbox.yview)
+        history_listbox.configure(yscrollcommand=history_scrollbar.set)
+        
+        return {
+            'transcription_frame': transcription_frame,
+            'history_listbox_frame': history_listbox_frame,
+            'history_listbox': history_listbox,
+            'history_scrollbar': history_scrollbar
+        }
+    
+    def _create_history_control_widgets(self, transcription_frame) -> Dict[str, Any]:
+        """Pure function to create history control button widgets"""
+        history_button_frame = ttk.Frame(transcription_frame)
+        
+        copy_selected_button = ttk.Button(
+            history_button_frame,
+            text="📋 Copy Selected",
+            command=self._copy_selected_transcription,
+            state=tk.DISABLED
+        )
+        
+        view_all_button = ttk.Button(
+            history_button_frame,
+            text="📚 View All History",
+            command=self._show_full_history
+        )
+        
+        clear_history_button = ttk.Button(
+            history_button_frame,
+            text="🗑️ Clear History",
+            command=self._clear_transcription_history
+        )
+        
+        return {
+            'history_button_frame': history_button_frame,
+            'copy_selected_button': copy_selected_button,
+            'view_all_button': view_all_button,
+            'clear_history_button': clear_history_button
+        }
+    
+    def _get_current_hotkey(self) -> str:
+        """Pure function to get current hotkey"""
+        if self.settings_manager:
+            settings_result = self.settings_manager.load_settings()
+            if settings_result.is_success():
+                return settings_result.value.hotkey
+        return self.config.get('hotkey', 'ctrl+r')
+    
+    @staticmethod
+    def _format_hotkey_display(hotkey: str) -> str:
+        """Pure function to format hotkey for display"""
+        parts = []
+        for part in hotkey.split('+'):
+            if part.lower() in ['ctrl', 'shift', 'alt', 'cmd']:
+                parts.append(part.capitalize())
             else:
-                logger.error(f"Invalid history_index {history_index} for history of length {len(self.transcription_history)}")
-                return
+                parts.append(part.lower())
+        return '+'.join(parts)
+
+    # Pure functions for recording operations (functional composition)
+    @staticmethod
+    def _create_hotkey_event(hotkey: str, is_recording_start: bool, source: str) -> Result[Any, str]:
+        """Pure function to create hotkey pressed event"""
+        try:
+            from shared.events import HotkeyPressedEvent
+            event = HotkeyPressedEvent(
+                hotkey_combination=hotkey,
+                is_recording_start=is_recording_start,
+                source=source
+            )
+            return Success(event)
+        except Exception as e:
+            return Failure(f"Failed to create hotkey event: {e}")
+    
+    def _publish_event_async(self, event) -> Result[None, Exception]:
+        """Publish event using thread-safe utility"""
+        from client.voice_client_app import VoiceClientApplication
+        publisher = VoiceClientApplication.create_thread_safe_publisher(self.event_bus)
+        return publisher(event)
+
+    # Pure functions for clipboard operations (functional composition)
+    @staticmethod
+    def _extract_selected_index(listbox_selection) -> Result[int, str]:
+        """Pure function to extract selected index from listbox selection"""
+        if not listbox_selection:
+            return Failure("No selection made")
+        return Success(listbox_selection[0])
+    
+    @staticmethod 
+    def _calculate_history_index(selected_index: int, history_length: int) -> Result[int, str]:
+        """Pure function to convert display index to history index"""
+        if selected_index >= history_length:
+            return Failure(f"Selected index {selected_index} exceeds history length {history_length}")
+        
+        history_index = history_length - 1 - selected_index
+        if 0 <= history_index < history_length:
+            return Success(history_index)
+        return Failure(f"Invalid history index {history_index}")
+    
+    @staticmethod
+    def _extract_text_from_history(history: list, history_index: int) -> Result[str, str]:
+        """Pure function to extract text from transcription history"""
+        if 0 <= history_index < len(history):
+            return Success(history[history_index]['text'])
+        return Failure(f"History index {history_index} out of bounds")
+    
+    def _copy_to_clipboard_and_primary(self, text: str) -> Result[None, Exception]:
+        """Copy text to both clipboard and primary selection"""
+        try:
+            import pyperclip
+            pyperclip.copy(text)
             
-            # Copy to clipboard using pyperclip to bypass external interference
+            # Set Tkinter clipboard and primary selection
             try:
-                import pyperclip
-                logger.info(f"DEBUG: Using pyperclip to set clipboard to: '{selected_text}'")
-                pyperclip.copy(selected_text)
-                
-                # ALSO set the PRIMARY selection (for middle mouse button) using Tkinter
-                try:
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(selected_text)
-                    # Set PRIMARY selection by clearing listbox selection and forcing our text
-                    self.root.selection_clear()
-                    self.root.selection_own()
-                    self.root.selection_handle(lambda offset, length: selected_text)
-                    logger.info("DEBUG: Set both CLIPBOARD and PRIMARY selection")
-                except Exception as e:
-                    logger.error(f"DEBUG: Error setting PRIMARY selection: {e}")
-                
-                # Alternative: try using xclip if available
-                try:
-                    import subprocess
-                    subprocess.run(['xclip', '-selection', 'primary'], 
-                                 input=selected_text.encode(), check=False)
-                    logger.info("DEBUG: Also set PRIMARY selection via xclip")
-                except Exception as e:
-                    logger.debug(f"DEBUG: xclip not available: {e}")
-                
-                # Verify with pyperclip immediately
-                clipboard_content = pyperclip.paste()
-                logger.info(f"DEBUG: pyperclip verification - contains: '{clipboard_content}'")
-                logger.info(f"DEBUG: pyperclip matches original? {clipboard_content == selected_text}")
-                
-                # Add a delay and check again to see if something overwrites it
-                import time
-                time.sleep(0.1)
-                clipboard_content_after_delay = pyperclip.paste()
-                logger.info(f"DEBUG: pyperclip verification AFTER 100ms delay - contains: '{clipboard_content_after_delay}'")
-                logger.info(f"DEBUG: Clipboard changed after delay? {clipboard_content != clipboard_content_after_delay}")
-                
-                if clipboard_content != selected_text:
-                    logger.error(f"DEBUG: PYPERCLIP MISMATCH! Expected: '{selected_text}', Got: '{clipboard_content}'")
-                    # Fallback to Tkinter method
-                    logger.info("DEBUG: Falling back to Tkinter clipboard method")
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(selected_text)
-                    self.root.update()
-                else:
-                    logger.info("DEBUG: pyperclip successfully set clipboard")
-                    
-            except ImportError:
-                logger.info("DEBUG: pyperclip not available, using Tkinter clipboard")
                 self.root.clipboard_clear()
-                self.root.clipboard_append(selected_text)
-                self.root.update()
-                
-                # Verify clipboard contents
-                try:
-                    clipboard_content = self.root.clipboard_get()
-                    logger.info(f"DEBUG: Tkinter clipboard verification - contains: '{clipboard_content}'")
-                    logger.info(f"DEBUG: Tkinter clipboard matches original? {clipboard_content == selected_text}")
-                except Exception as e:
-                    logger.error(f"Could not verify clipboard contents: {e}")
+                self.root.clipboard_append(text)
+                self.root.selection_clear()
+                self.root.selection_own()
+                self.root.selection_handle(lambda offset, length: text)
+                logger.debug("Set clipboard and primary selection")
             except Exception as e:
-                logger.error(f"Error with pyperclip: {e}")
-                # Fallback to Tkinter
-                self.root.clipboard_clear()
-                self.root.clipboard_append(selected_text)
-                self.root.update()
+                logger.error(f"Error setting primary selection: {e}")
             
-            # Publish copy event
+            # Also try xclip for primary selection
+            try:
+                import subprocess
+                subprocess.run(['xclip', '-selection', 'primary'], 
+                             input=text.encode(), check=False)
+                logger.debug("Set primary selection via xclip")
+            except Exception as e:
+                logger.debug(f"xclip not available: {e}")
+            
+            return Success(None)
+            
+        except ImportError:
+            # Fallback to Tkinter only
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()
+            return Success(None)
+        except Exception as e:
+            # Final fallback to Tkinter
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.root.update()
+                return Success(None)
+            except Exception as fallback_error:
+                return Failure(fallback_error)
+    
+    def _publish_copy_event(self, text: str, history_index: int) -> Result[None, Exception]:
+        """Publish transcription copied event"""
+        try:
+            from .gui_events import TranscriptionCopiedEvent
             event = TranscriptionCopiedEvent(
-                text=selected_text,
+                text=text,
                 transcription_id=str(history_index),
                 source="gui_history_copy"
             )
-            # Use call_soon_threadsafe to schedule the coroutine
             loop = asyncio.get_event_loop()
             loop.call_soon_threadsafe(lambda: asyncio.create_task(self.event_bus.publish(event)))
-            
-            # Show brief confirmation
-            original_text = self.copy_selected_button.cget("text")
-            self.copy_selected_button.config(text="✅ Copied!")
-            self.root.after(2000, lambda: self.copy_selected_button.config(text=original_text))
+            return Success(None)
+        except Exception as e:
+            return Failure(e)
+    
+    def _show_copy_confirmation(self) -> None:
+        """Show brief copy confirmation in UI"""
+        original_text = self.copy_selected_button.cget("text")
+        self.copy_selected_button.config(text="✅ Copied!")
+        self.root.after(2000, lambda: self.copy_selected_button.config(text=original_text))
+
+    def _copy_selected_transcription(self) -> None:
+        """Copy selected transcription to clipboard using functional composition"""
+        result = (
+            MainWindow._extract_selected_index(self.history_listbox.curselection())
+            .flat_map(lambda selected_index: 
+                MainWindow._calculate_history_index(selected_index, len(self.transcription_history))
+                .flat_map(lambda history_index:
+                    MainWindow._extract_text_from_history(self.transcription_history, history_index)
+                    .flat_map(lambda text:
+                        self._copy_to_clipboard_and_primary(text)
+                        .flat_map(lambda _:
+                            self._publish_copy_event(text, history_index)
+                            .map(lambda _: (text, history_index))
+                        )
+                    )
+                )
+            )
+        )
+        
+        if result.is_success():
+            self._show_copy_confirmation()
+        else:
+            error_msg = str(result.error)
+            if "No selection" in error_msg:
+                messagebox.showwarning("No Selection", "Please select a transcription to copy.")
+            else:
+                logger.error(f"Copy operation failed: {error_msg}")
     
     def _show_full_history(self) -> None:
         """Show full history window"""
@@ -537,8 +654,19 @@ class MainWindow:
     
     def _show_settings(self) -> None:
         """Show settings window"""
-        # TODO: Implement settings window
-        messagebox.showinfo("Settings", "Settings window coming soon!")
+        try:
+            if hasattr(self, 'settings_window') and self.settings_window:
+                # Show existing settings window
+                result = self.settings_window.show(self.root)
+                if result.is_failure():
+                    logger.error(f"Failed to show settings window: {result.error}")
+                    messagebox.showerror("Error", f"Failed to show settings: {result.error}")
+            else:
+                logger.warning("Settings window not available")
+                messagebox.showinfo("Settings", "Settings window not available")
+        except Exception as e:
+            logger.error(f"Error showing settings: {e}")
+            messagebox.showerror("Error", f"Failed to show settings: {e}")
     
     def _on_window_close(self) -> None:
         """Handle window close event"""
@@ -551,6 +679,142 @@ class MainWindow:
         """Run the GUI main loop (blocking) - should not be called in async context"""
         if self.root:
             self.root.mainloop()
+    
+    def _setup_gui_hotkeys(self) -> None:
+        """Setup GUI-focused keyboard shortcuts as fallback for global hotkeys"""
+        try:
+            # Load current hotkey setting from settings manager (live) or config fallback
+            if self.settings_manager:
+                settings_result = self.settings_manager.load_settings()
+                if settings_result.is_success():
+                    hotkey = settings_result.value.hotkey
+                else:
+                    hotkey = self.config.get('hotkey', 'ctrl+r')
+            elif hasattr(self, 'config') and 'hotkey' in self.config:
+                hotkey = self.config['hotkey']
+            else:
+                hotkey = 'ctrl+r'  # default
+                
+            # Convert hotkey format for tkinter (ctrl+shift+r -> <Control-Shift-r>)
+            tk_hotkey = self._convert_hotkey_to_tk_format(hotkey)
+            
+            # Bind the hotkey to the main window
+            self.root.bind_all(tk_hotkey, self._on_gui_hotkey)
+            
+            logger.info(f"GUI hotkey bound: {tk_hotkey} (fallback for global hotkey)")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup GUI hotkeys: {e}")
+    
+    def _convert_hotkey_to_tk_format(self, hotkey: str) -> str:
+        """Convert hotkey format from 'ctrl+shift+r' to '<Control-Shift-r>'"""
+        parts = hotkey.lower().split('+')
+        tk_parts = []
+        
+        for part in parts:
+            if part == 'ctrl':
+                tk_parts.append('Control')
+            elif part == 'shift':
+                tk_parts.append('Shift') 
+            elif part == 'alt':
+                tk_parts.append('Alt')
+            elif part == 'cmd' or part == 'meta':
+                tk_parts.append('Meta')
+            else:
+                # Last part is the key
+                tk_parts.append(part.upper())
+                
+        return f"<{'-'.join(tk_parts)}>"
+    
+    def _on_gui_hotkey(self, event) -> None:
+        """Handle GUI hotkey press (when window has focus)"""
+        try:
+            logger.debug("GUI hotkey triggered (window focused)")
+            
+            # Publish hotkey pressed event (same as global hotkey)
+            # Get current hotkey from settings (live reload) or fallback to config  
+            if self.settings_manager:
+                settings_result = self.settings_manager.load_settings()
+                if settings_result.is_success():
+                    hotkey = settings_result.value.hotkey
+                else:
+                    hotkey = self.config.get('hotkey', 'ctrl+r')
+            else:
+                hotkey = self.config.get('hotkey', 'ctrl+r')
+            is_recording_start = self.recording_state == "ready"
+            
+            import asyncio
+            from shared.events import HotkeyPressedEvent
+            
+            # Create and publish event
+            event_obj = HotkeyPressedEvent(
+                hotkey_combination=hotkey,
+                is_recording_start=is_recording_start,
+                source="gui_hotkey"
+            )
+            
+            # Use call_soon_threadsafe to schedule the event publishing
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(self.event_bus.publish(event_obj))
+            )
+            
+            logger.info("GUI hotkey event published")
+            
+        except Exception as e:
+            logger.error(f"Failed to handle GUI hotkey: {e}")
+    
+    def _toggle_always_on_top(self) -> None:
+        """Toggle window always-on-top behavior"""
+        try:
+            self.always_on_top = not self.always_on_top
+            self.root.attributes('-topmost', self.always_on_top)
+            
+            if self.always_on_top:
+                self.topmost_button.config(text="📌 On Top")
+                logger.info("Window set to always on top")
+            else:
+                self.topmost_button.config(text="📌 Normal")
+                logger.info("Window set to normal behavior")
+                
+        except Exception as e:
+            logger.error(f"Failed to toggle always on top: {e}")
+    
+    def refresh_settings_display(self) -> None:
+        """Refresh GUI display when settings change"""
+        try:
+            # Get current hotkey from settings
+            if self.settings_manager:
+                settings_result = self.settings_manager.load_settings()
+                if settings_result.is_success():
+                    hotkey = settings_result.value.hotkey
+                else:
+                    hotkey = self.config.get('hotkey', 'ctrl+r')
+            else:
+                hotkey = self.config.get('hotkey', 'ctrl+r')
+            
+            # Format hotkey for display - capitalize modifiers but keep single chars lowercase
+            parts = []
+            for part in hotkey.split('+'):
+                if part.lower() in ['ctrl', 'shift', 'alt', 'cmd']:
+                    parts.append(part.capitalize())
+                else:
+                    # Keep single character keys lowercase
+                    parts.append(part.lower())
+            hotkey_display = '+'.join(parts)
+            
+            # Update instruction label
+            if hasattr(self, 'instruction_label') and self.instruction_label:
+                new_text = f"💡 Focus here, press {hotkey_display} to record → text auto-types where you were!"
+                self.instruction_label.config(text=new_text)
+                logger.info(f"Updated GUI instruction text to show: {hotkey_display}")
+            
+            # Re-setup GUI hotkeys with new binding
+            self._setup_gui_hotkeys()
+            logger.info(f"GUI settings display refreshed for hotkey: {hotkey}")
+            
+        except Exception as e:
+            logger.error(f"Failed to refresh settings display: {e}")
     
     def destroy(self) -> None:
         """Destroy the window and cleanup"""

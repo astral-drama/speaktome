@@ -143,12 +143,18 @@ class PyAudioProvider(AudioProvider):
         
         if result.is_success():
             # Publish event
-            await self.event_bus.publish(RecordingStartedEvent(
+            event = RecordingStartedEvent(
                 sample_rate=self.sample_rate,
                 channels=self.channels,
                 device_id=self.input_device,
                 source="audio_provider"
-            ))
+            )
+            logger.info(f"🔴 Publishing RecordingStartedEvent: {event}")
+            publish_result = await self.event_bus.publish(event)
+            if publish_result.is_failure():
+                logger.error(f"Failed to publish RecordingStartedEvent: {publish_result.error}")
+            else:
+                logger.info("✅ RecordingStartedEvent published successfully")
             
             logger.info("Audio recording started")
         else:
@@ -200,11 +206,17 @@ class PyAudioProvider(AudioProvider):
             audio_data = result.value
             
             # Publish event
-            await self.event_bus.publish(RecordingStoppedEvent(
+            event = RecordingStoppedEvent(
                 duration_seconds=audio_data.duration_seconds,
                 audio_size_bytes=len(audio_data.data),
                 source="audio_provider"
-            ))
+            )
+            logger.info(f"⏹️ Publishing RecordingStoppedEvent: {event}")
+            publish_result = await self.event_bus.publish(event)
+            if publish_result.is_failure():
+                logger.error(f"Failed to publish RecordingStoppedEvent: {publish_result.error}")
+            else:
+                logger.info("✅ RecordingStoppedEvent published successfully")
             
             logger.info(f"Recording stopped: {audio_data.duration_seconds:.2f}s, {len(audio_data.data)} bytes")
         else:

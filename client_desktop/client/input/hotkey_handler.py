@@ -71,15 +71,22 @@ class PynputHotkeyHandler(HotkeyHandler):
     async def initialize(self) -> Result[None, Exception]:
         """Initialize the global hotkey listener"""
         def _initialize():
-            self.listener = Listener(
-                on_press=self._on_key_press,
-                on_release=self._on_key_release
-            )
-            
-            self.listener.start()
-            self._active = True
-            
-            logger.info("Global hotkey listener started")
+            try:
+                self.listener = Listener(
+                    on_press=self._on_key_press,
+                    on_release=self._on_key_release
+                )
+                
+                self.listener.start()
+                self._active = True
+                
+                logger.info("Global hotkey listener started successfully")
+                logger.info(f"Listener daemon status: {self.listener.daemon}")
+                logger.info(f"Listener running: {self.listener.running}")
+                
+            except Exception as e:
+                logger.error(f"Failed to start global hotkey listener: {e}")
+                raise
         
         return from_callable(_initialize).map(lambda _: None)
     
@@ -165,18 +172,32 @@ class PynputHotkeyHandler(HotkeyHandler):
     def _create_event_callback(self, combination: str, original_callback: Callable[[], None]) -> Callable[[], None]:
         """Create a callback that publishes events and calls the original callback"""
         def event_callback():
+            logger.debug(f"Hotkey triggered: {combination}")
+            
             # Determine if this is a recording start or stop
             # This is a simple heuristic - in practice you might want more state tracking
             is_recording_start = True  # This would be determined by application state
             
-            # Publish hotkey event
-            asyncio.create_task(
-                self.event_bus.publish(HotkeyPressedEvent(
-                    hotkey_combination=combination,
-                    is_recording_start=is_recording_start,
-                    source="hotkey_handler"
-                ))
-            )
+            # Publish hotkey event (thread-safe)
+            try:
+                import threading
+                # Get the main event loop (thread-safe)
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule the coroutine in the main thread
+                    loop.call_soon_threadsafe(
+                        lambda: asyncio.create_task(
+                            self.event_bus.publish(HotkeyPressedEvent(
+                                hotkey_combination=combination,
+                                is_recording_start=is_recording_start,
+                                source="hotkey_handler"
+                            ))
+                        )
+                    )
+                else:
+                    logger.warning("Event loop not running - cannot publish hotkey event")
+            except Exception as e:
+                logger.warning(f"Failed to publish hotkey event: {e}")
             
             # Call the original callback
             try:

@@ -109,83 +109,119 @@ class HistoryWindow:
         
         logger.info("History window created")
     
-    def _create_widgets(self) -> None:
-        """Create history window widgets"""
-        # Main paned window
+    # Pure UI builder functions (functional composition)
+    def _create_paned_structure(self) -> Dict[str, Any]:
+        """Pure function to create main paned window structure"""
         paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         
-        # Left frame - history list
         left_frame = ttk.Frame(paned)
         paned.add(left_frame, weight=1)
         
-        # History tree view
-        tree_frame = ttk.Frame(left_frame)
-        
-        # Column headers
-        columns = ('datetime', 'preview')
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=15)
-        
-        # Configure columns
-        self.tree.heading('datetime', text='Date & Time')
-        self.tree.heading('preview', text='Preview')
-        self.tree.column('datetime', width=150, anchor='w')
-        self.tree.column('preview', width=300, anchor='w')
-        
-        # Scrollbar for tree
-        tree_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=tree_scrollbar.set)
-        
-        # Bind selection event
-        self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
-        
-        # Right frame - details
         right_frame = ttk.Frame(paned)
         paned.add(right_frame, weight=1)
         
-        # Details label
-        details_label = ttk.Label(right_frame, text="Full Text:", font=('Arial', 10, 'bold'))
+        return {
+            'paned': paned,
+            'left_frame': left_frame,
+            'right_frame': right_frame
+        }
+    
+    def _create_history_tree_widgets(self, parent_frame) -> Dict[str, Any]:
+        """Pure function to create history tree view widgets"""
+        tree_frame = ttk.Frame(parent_frame)
         
-        # Details text area
-        details_frame = ttk.Frame(right_frame)
-        self.details_text = tk.Text(details_frame, wrap=tk.WORD, state=tk.DISABLED,
-                                  font=('Arial', 10), height=20)
+        # Configure tree view columns
+        columns = ('datetime', 'preview')
+        tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=15)
+        
+        # Set column headers and properties
+        tree.heading('datetime', text='Date & Time')
+        tree.heading('preview', text='Preview')
+        tree.column('datetime', width=150, anchor='w')
+        tree.column('preview', width=300, anchor='w')
+        
+        # Add scrollbar for tree
+        tree_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=tree_scrollbar.set)
+        
+        # Bind selection event
+        tree.bind('<<TreeviewSelect>>', self._on_tree_select)
+        
+        return {
+            'tree_frame': tree_frame,
+            'tree': tree,
+            'tree_scrollbar': tree_scrollbar
+        }
+    
+    def _create_details_widgets(self, parent_frame) -> Dict[str, Any]:
+        """Pure function to create details display widgets"""
+        details_label = ttk.Label(parent_frame, text="Full Text:", font=('Arial', 10, 'bold'))
+        
+        details_frame = ttk.Frame(parent_frame)
+        details_text = tk.Text(details_frame, wrap=tk.WORD, state=tk.DISABLED,
+                             font=('Arial', 10), height=20)
         details_scrollbar = ttk.Scrollbar(details_frame, orient=tk.VERTICAL,
-                                        command=self.details_text.yview)
-        self.details_text.configure(yscrollcommand=details_scrollbar.set)
+                                        command=details_text.yview)
+        details_text.configure(yscrollcommand=details_scrollbar.set)
         
-        # Button frame
+        return {
+            'details_label': details_label,
+            'details_frame': details_frame,
+            'details_text': details_text,
+            'details_scrollbar': details_scrollbar
+        }
+    
+    def _create_action_button_widgets(self) -> Dict[str, Any]:
+        """Pure function to create action button widgets"""
         button_frame = ttk.Frame(self.root)
         
-        # Copy button
         copy_button = ttk.Button(button_frame, text="Copy Selected", 
-                                command=self._copy_selected)
+                               command=self._copy_selected)
         
-        # Export button
         export_button = ttk.Button(button_frame, text="Export All",
                                  command=self._export_history)
         
-        # Clear button
         clear_button = ttk.Button(button_frame, text="Clear All",
                                 command=self._clear_history)
         
-        # Close button
         close_button = ttk.Button(button_frame, text="Close",
                                 command=self.hide)
         
-        # Store references
-        self.paned = paned
-        self.left_frame = left_frame
-        self.right_frame = right_frame
-        self.tree_frame = tree_frame
-        self.tree_scrollbar = tree_scrollbar
-        self.details_label = details_label
-        self.details_frame = details_frame
-        self.details_scrollbar = details_scrollbar
-        self.button_frame = button_frame
-        self.copy_button = copy_button
-        self.export_button = export_button
-        self.clear_button = clear_button
-        self.close_button = close_button
+        return {
+            'button_frame': button_frame,
+            'copy_button': copy_button,
+            'export_button': export_button,
+            'clear_button': clear_button,
+            'close_button': close_button
+        }
+
+    def _create_widgets(self) -> None:
+        """Create history window widgets using functional composition"""
+        # Compose UI sections using pure functions
+        paned_widgets = self._create_paned_structure()
+        tree_widgets = self._create_history_tree_widgets(paned_widgets['left_frame'])
+        details_widgets = self._create_details_widgets(paned_widgets['right_frame'])
+        button_widgets = self._create_action_button_widgets()
+        
+        # Store widget references (preserving original interface)
+        self.paned = paned_widgets['paned']
+        self.left_frame = paned_widgets['left_frame']
+        self.right_frame = paned_widgets['right_frame']
+        
+        self.tree_frame = tree_widgets['tree_frame']
+        self.tree = tree_widgets['tree']
+        self.tree_scrollbar = tree_widgets['tree_scrollbar']
+        
+        self.details_label = details_widgets['details_label']
+        self.details_frame = details_widgets['details_frame']
+        self.details_text = details_widgets['details_text']
+        self.details_scrollbar = details_widgets['details_scrollbar']
+        
+        self.button_frame = button_widgets['button_frame']
+        self.copy_button = button_widgets['copy_button']
+        self.export_button = button_widgets['export_button']
+        self.clear_button = button_widgets['clear_button']
+        self.close_button = button_widgets['close_button']
     
     def _setup_layout(self) -> None:
         """Setup widget layout"""

@@ -14,7 +14,7 @@ import signal
 import sys
 import uuid
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable, Awaitable
 
 from shared.functional import Result, Success, Failure, setup_logging, merge_configs, validate_required_keys, from_callable
 from shared.events import (
@@ -37,6 +37,7 @@ from .providers.audio_provider import PyAudioProvider
 from .providers.transcription_client import TranscriptionClient
 from .providers.text_injection_provider import PyAutoGUIProvider
 from .input.hotkey_handler import PynputHotkeyHandler, HotkeyRegistry
+from .settings import get_settings_manager, AppSettings
 
 # GUI imports (optional - only imported if GUI is enabled)
 try:
@@ -59,11 +60,18 @@ class VoiceClientApplication:
     consistent with the server design philosophy.
     """
     
-    def __init__(self, config: ClientConfig, show_gui: bool = False):
+    def __init__(self, config: ClientConfig, show_gui: bool = False, config_file: Optional[str] = None):
         self.config = config
         self.running = False
         self.recording_state = False
         self.show_gui = show_gui
+        
+        # Store reference to main event loop for thread-safe callbacks
+        self.main_loop: Optional[asyncio.AbstractEventLoop] = None
+        
+        # Initialize settings manager
+        self.settings_manager = get_settings_manager(config_file)
+        self.app_settings: Optional[AppSettings] = None
         
         # Initialize container and event bus
         self.container = ClientContainer(config)
@@ -88,6 +96,23 @@ class VoiceClientApplication:
         logger.info("Initializing voice client application...")
         
         try:
+            # Load application settings
+            settings_result = self.settings_manager.load_settings()
+            if settings_result.is_success():
+                self.app_settings = settings_result.value
+                logger.info("Application settings loaded successfully")
+                
+                # Update config with settings (for backwards compatibility)
+                self.config.hotkey = self.app_settings.hotkey
+                self.config.server_url = self.app_settings.server_url
+                self.config.model = self.app_settings.model
+                self.config.audio_sample_rate = self.app_settings.audio_sample_rate
+                self.config.audio_channels = self.app_settings.audio_channels
+                self.config.logging_level = self.app_settings.logging_level
+            else:
+                logger.warning(f"Failed to load settings: {settings_result.error}")
+                self.app_settings = AppSettings()
+            
             # Setup logging
             setup_logging(self.config.logging_level)
             
@@ -137,10 +162,14 @@ class VoiceClientApplication:
         
         self.running = True
         
+        # Store reference to the main event loop for thread-safe callbacks
+        self.main_loop = asyncio.get_running_loop()
+        logger.debug(f"Stored main event loop reference: {self.main_loop}")
+        
         # Setup signal handlers
         self._setup_signal_handlers()
         
-        logger.info("🎤 Voice client started!")
+        logger.info("Voice client started")
         logger.info(f"Press {self.config.hotkey.upper()} to start/stop recording")
         
         return Success(None)
@@ -288,82 +317,246 @@ class VoiceClientApplication:
         if not self.hotkey_registry:
             return Failure(Exception("Hotkey registry not initialized"))
         
+        # Get current hotkey from settings (not cached config)
+        settings_result = self.settings_manager.load_settings()
+        if settings_result.is_failure():
+            logger.warning(f"Failed to load settings for hotkey setup: {settings_result.error}")
+            current_hotkey = self.config.hotkey  # fallback to config
+        else:
+            current_hotkey = settings_result.value.hotkey
+            
+        logger.info(f"Setting up global hotkey: {current_hotkey}")
+        
         # Register main voice recording hotkey
         return await self.hotkey_registry.register_voice_trigger(
-            self.config.hotkey,
+            current_hotkey,
             self._handle_voice_hotkey
         )
+    
+    # Thread-safe event publishing utility (functional composition)
+    @staticmethod
+    def create_thread_safe_publisher(event_bus) -> Callable[[Any], Result[None, Exception]]:
+        """Factory function to create thread-safe event publisher"""
+        def publish_event_thread_safe(event) -> Result[None, Exception]:
+            """Thread-safe event publisher with proper error handling"""
+            try:
+                # Get the current event loop
+                try:
+                    loop = asyncio.get_running_loop()
+                    # We are in an async context with a running loop
+                    if loop.is_running():
+                        # Schedule the publish task in the event loop
+                        loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(event_bus.publish(event))
+                        )
+                    else:
+                        # Loop exists but is not running - create task directly
+                        asyncio.create_task(event_bus.publish(event))
+                except RuntimeError:
+                    # No running loop - we need to handle this case
+                    try:
+                        # Try to get the main loop if set
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            loop.call_soon_threadsafe(
+                                lambda: asyncio.create_task(event_bus.publish(event))
+                            )
+                        else:
+                            # Create and run the event publishing
+                            asyncio.create_task(event_bus.publish(event))
+                    except Exception:
+                        # Fallback to sync publishing if available
+                        if hasattr(event_bus, 'publish_sync'):
+                            return event_bus.publish_sync(event)
+                        else:
+                            raise RuntimeError(f"Cannot publish event {event.event_type}: no valid event loop")
+                
+                logger.debug(f"Event published thread-safely: {event.event_type}")
+                return Success(None)
+                
+            except Exception as e:
+                logger.error(f"Failed to publish event {getattr(event, 'event_type', 'unknown')}: {e}")
+                return Failure(e)
+        
+        return publish_event_thread_safe
+    
+    @staticmethod
+    async def create_async_publisher(event_bus) -> Callable[[Any], Awaitable[Result[None, Exception]]]:
+        """Factory function to create async event publisher"""
+        async def publish_event_async(event) -> Result[None, Exception]:
+            """Async event publisher with proper error handling"""
+            try:
+                result = await event_bus.publish(event)
+                logger.debug(f"Event published async: {event.event_type}")
+                return result if hasattr(result, 'is_success') else Success(None)
+            except Exception as e:
+                logger.error(f"Failed to publish event async {getattr(event, 'event_type', 'unknown')}: {e}")
+                return Failure(e)
+        
+        return publish_event_async
+
+    # Pure functions for event handling (functional composition)
+    @staticmethod
+    def _create_success_result() -> Result[None, Exception]:
+        """Pure function returning success result"""
+        return Success(None)
+    
+    def _update_recording_state(self, is_recording: bool) -> Result[None, Exception]:
+        """Pure state update function"""
+        try:
+            self.recording_state = is_recording
+            state_desc = "started" if is_recording else "stopped"
+            logger.info(f"Recording state updated: {state_desc}")
+            return Success(None)
+        except Exception as e:
+            return Failure(e)
+    
+    @staticmethod
+    def _copy_to_clipboard_systems(text: str) -> Result[None, Exception]:
+        """Pure function to copy text to all clipboard systems"""
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            logger.debug(f"Text copied to clipboard: '{text[:30]}...'")
+            
+            # Also copy to primary selection on Linux
+            try:
+                import subprocess
+                import platform
+                if platform.system() == "Linux":
+                    for cmd in [['xsel', '-pi'], ['xclip', '-selection', 'primary']]:
+                        try:
+                            subprocess.run(cmd, input=text.encode(), check=True, timeout=1)
+                            logger.debug(f"Text copied to primary selection: '{text[:30]}...'")
+                            break
+                        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                            continue
+                    else:
+                        logger.debug("Neither xsel nor xclip available for primary selection")
+            except Exception as e:
+                logger.debug(f"Could not set primary selection: {e}")
+            
+            return Success(None)
+        except Exception as e:
+            return Failure(e)
+    
+    async def _inject_text_with_delay(self, text: str) -> Result[None, Exception]:
+        """Function to inject text with proper delay and formatting"""
+        if not self.text_injection_provider or not text.strip():
+            return Success(None)
+            
+        try:
+            await asyncio.sleep(0.2)  # Delay for user focus
+            
+            injection_result = await self.text_injection_provider.inject_text(
+                text,
+                add_space_after=True,
+                delay=0.1
+            )
+            
+            if injection_result.is_failure():
+                logger.error(f"Failed to inject text: {injection_result.error}")
+                return injection_result
+            else:
+                logger.info("✅ Text successfully injected into active window")
+                return Success(None)
+                
+        except Exception as e:
+            return Failure(e)
     
     def _register_event_handlers(self):
         """Register event handlers for application orchestration"""
         
         @async_event_handler("hotkey.pressed")
         async def handle_hotkey_pressed(event: HotkeyPressedEvent) -> Result[None, Exception]:
-            logger.info(f"🔥 Hotkey pressed: {event.hotkey_combination} (source: {event.source})")
-            # Trigger recording toggle
+            logger.debug(f"Hotkey pressed: {event.hotkey_combination} (source: {event.source})")
             await self._toggle_recording()
-            return Success(None)
+            return self._create_success_result()
         
         @async_event_handler("recording.started")
         async def handle_recording_started(event: RecordingStartedEvent) -> Result[None, Exception]:
-            self.recording_state = True
-            logger.info(f"🔴 Recording started at {event.sample_rate}Hz")
-            return Success(None)
+            logger.info(f"Recording started at {event.sample_rate}Hz")
+            return self._update_recording_state(True)
         
         @async_event_handler("recording.stopped") 
         async def handle_recording_stopped(event: RecordingStoppedEvent) -> Result[None, Exception]:
-            self.recording_state = False
-            logger.info(f"⏹️ Recording stopped: {event.duration_seconds:.2f}s")
-            return Success(None)
+            logger.info(f"Recording stopped: {event.duration_seconds:.2f}s")
+            return self._update_recording_state(False)
         
         @async_event_handler("audio.captured")
         async def handle_audio_captured(event: AudioCapturedEvent) -> Result[None, Exception]:
-            logger.info(f"🎵 Audio captured: {event.duration_seconds:.2f}s")
-            return Success(None)
+            logger.info(f"Audio captured: {event.duration_seconds:.2f}s")
+            return self._create_success_result()
         
         @async_event_handler("transcription.received")
         async def handle_transcription_received(event: TranscriptionReceivedEvent) -> Result[None, Exception]:
-            logger.info(f"📝 Transcription: '{event.text}' ({event.processing_time:.3f}s)")
+            logger.info(f"Transcription received: '{event.text}' ({event.processing_time:.3f}s)")
             
-            # Inject text into active window (only in headless mode, not GUI mode)
-            if self.text_injection_provider and event.text.strip() and not self.show_gui:
-                await self.text_injection_provider.inject_text(event.text)
+            if not event.text.strip():
+                return self._create_success_result()
             
-            return Success(None)
+            logger.debug(f"Auto-injecting transcription: '{event.text}'")
+            
+            # Sequential functional composition with proper async handling
+            clipboard_result = self._copy_to_clipboard_systems(event.text)
+            if clipboard_result.is_failure():
+                logger.warning(f"Clipboard operation failed: {clipboard_result.error}")
+            
+            injection_result = await self._inject_text_with_delay(event.text)
+            if injection_result.is_failure():
+                return injection_result
+                
+            return self._create_success_result()
         
         @async_event_handler("text.injected")
         async def handle_text_injected(event: TextInjectedEvent) -> Result[None, Exception]:
             logger.info(f"✅ Text injected: '{event.text[:30]}...'")
-            return Success(None)
+            return self._create_success_result()
         
         @async_event_handler("connection.status")
         async def handle_connection_status(event: ConnectionStatusEvent) -> Result[None, Exception]:
-            if event.status == "connected":
-                logger.info(f"🌐 Connected to server: {event.server_url}")
-            elif event.status == "disconnected":
-                logger.warning(f"🌐 Disconnected from server: {event.server_url}")
-            elif event.status == "error":
-                logger.error(f"🌐 Connection error: {event.error_message}")
+            status_messages = {
+                "connected": lambda: logger.info(f"Connected to server: {event.server_url}"),
+                "disconnected": lambda: logger.warning(f"Disconnected from server: {event.server_url}"),
+                "error": lambda: logger.error(f"Connection error: {event.error_message}")
+            }
             
-            return Success(None)
+            status_handler = status_messages.get(event.status)
+            if status_handler:
+                status_handler()
+            
+            return self._create_success_result()
         
         @async_event_handler("system.error")
         async def handle_system_error(event: ErrorEvent) -> Result[None, Exception]:
-            logger.error(f"❌ {event.component} error: {event.error_message}")
-            return Success(None)
+            logger.error(f"{event.component} error: {event.error_message}")
+            return self._create_success_result()
         
         logger.debug("Event handlers registered")
     
     def _handle_voice_hotkey(self):
         """Handle voice recording hotkey press"""
+        logger.debug("Voice hotkey pressed, handling event")
         if not self.running:
+            logger.warning("Hotkey pressed but app not running, ignoring")
             return
         
-        # Use asyncio to handle the hotkey in the event loop
-        asyncio.create_task(self._toggle_recording())
+        # Schedule the async task in the main event loop (thread-safe)
+        try:
+            if self.main_loop and not self.main_loop.is_closed():
+                logger.debug("Scheduling toggle recording in main event loop")
+                self.main_loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(self._toggle_recording())
+                )
+            else:
+                logger.warning("Main event loop not available - cannot handle hotkey")
+        except Exception as e:
+            logger.error(f"Failed to schedule recording toggle: {e}")
     
     async def _toggle_recording(self):
         """Toggle recording state"""
+        logger.debug(f"Toggle recording called - current state: {self.recording_state}")
+        
         if not self.audio_provider:
             logger.error("Audio provider not available")
             return
@@ -454,7 +647,7 @@ class VoiceClientApplication:
         
         try:
             # Create main window
-            self.gui_main_window = MainWindow(self.event_bus, self.config.__dict__)
+            self.gui_main_window = MainWindow(self.event_bus, self.config.__dict__, self.settings_manager)
             gui_init_result = self.gui_main_window.initialize()
             if gui_init_result.is_failure():
                 return gui_init_result
@@ -463,14 +656,16 @@ class VoiceClientApplication:
             self.gui_settings_window = SettingsWindow(
                 self.event_bus, 
                 self.config.__dict__,
-                on_settings_changed=self._on_gui_settings_changed
+                on_settings_changed=self._on_gui_settings_changed,
+                config_file=str(self.settings_manager.config_file)
             )
             
             # Create history window  
             self.gui_history_window = HistoryWindow(self.event_bus)
             
-            # Connect history window to main window
+            # Connect history and settings windows to main window
             self.gui_main_window.history_window = self.gui_history_window
+            self.gui_main_window.settings_window = self.gui_settings_window
             
             # Subscribe to transcription events to update history
             self.event_bus.subscribe("transcription.received", self._handle_gui_transcription)
@@ -497,26 +692,50 @@ class VoiceClientApplication:
     
     def _on_gui_settings_changed(self, new_settings: Dict[str, Any]) -> None:
         """Handle settings changes from GUI"""
-        # Update config
+        # Update config (for backwards compatibility)
         for key, value in new_settings.items():
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
+        
+        # Update app settings
+        if self.app_settings:
+            for key, value in new_settings.items():
+                if hasattr(self.app_settings, key):
+                    setattr(self.app_settings, key, value)
         
         # Apply hotkey changes if needed
         if 'hotkey' in new_settings and self.hotkey_registry:
             # Re-register hotkey
             asyncio.create_task(self._reregister_hotkey(new_settings['hotkey']))
         
+        # Apply server URL changes
+        if 'server_url' in new_settings and self.transcription_client:
+            # Note: Server URL changes require restart - inform user
+            logger.info("Server URL changed - restart required to take effect")
+        
+        # Refresh GUI display if GUI is available
+        if hasattr(self, 'gui_main_window') and self.gui_main_window:
+            try:
+                self.gui_main_window.refresh_settings_display()
+                logger.info("GUI display refreshed after settings update")
+            except Exception as e:
+                logger.warning(f"Failed to refresh GUI display: {e}")
+        
         logger.info(f"Settings updated from GUI: {list(new_settings.keys())}")
     
     async def _reregister_hotkey(self, new_hotkey: str) -> None:
         """Re-register hotkey with new combination"""
         if self.hotkey_registry:
-            # Unregister old hotkey
-            await self.hotkey_registry.unregister_voice_trigger()
+            # Unregister all old hotkeys
+            unregister_result = await self.hotkey_registry.unregister_all()
+            if unregister_result.is_failure():
+                logger.warning(f"Failed to unregister old hotkeys: {unregister_result.error}")
             
-            # Register new hotkey
-            register_result = await self.hotkey_registry.register_voice_trigger(new_hotkey)
+            # Register new hotkey with the same callback as original setup
+            register_result = await self.hotkey_registry.register_voice_trigger(
+                new_hotkey, 
+                self._handle_voice_hotkey
+            )
             if register_result.is_success():
                 logger.info(f"Hotkey updated to: {new_hotkey}")
             else:
@@ -546,46 +765,64 @@ class VoiceClientApplication:
         signal.signal(signal.SIGTERM, signal_handler)
 
 
-def load_config_from_file(config_path: str) -> Result[ClientConfig, Exception]:
-    """Load configuration from file with validation"""
-    def _load_config():
+# Pure functions for configuration loading (functional composition)
+def _read_config_file(config_path: str) -> Result[dict, Exception]:
+    """Pure function to read and parse config file"""
+    try:
         config_file = Path(config_path)
         
         if not config_file.exists():
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            return Failure(FileNotFoundError(f"Configuration file not found: {config_path}"))
         
         with open(config_file, 'r') as f:
             config_dict = json.load(f)
         
-        # Validate required keys
-        required_keys = ['server_url', 'hotkey']
-        validation_result = validate_required_keys(config_dict, required_keys)
-        if validation_result.is_failure():
-            raise ValueError(validation_result.error)
-        
-        # Create config object
+        return Success(config_dict)
+    except Exception as e:
+        return Failure(e)
+
+
+def _validate_config_dict(config_dict: dict) -> Result[dict, Exception]:
+    """Pure function to validate configuration dictionary"""
+    required_keys = ['server_url', 'hotkey']
+    validation_result = validate_required_keys(config_dict, required_keys)
+    
+    if validation_result.is_failure():
+        return Failure(ValueError(validation_result.error))
+    
+    return Success(config_dict)
+
+
+def _create_config_from_dict(config_dict: dict) -> Result[ClientConfig, Exception]:
+    """Pure function to create ClientConfig from validated dictionary"""
+    try:
         config = ClientConfig()
         
-        # Update with file values
+        # Define mapping for attribute updates
+        attribute_prefixes = ['audio_', 'text_', 'ui_']
+        
         for key, value in config_dict.items():
             if hasattr(config, key):
                 setattr(config, key, value)
-            elif key.startswith('audio_'):
-                attr_name = key  # audio_sample_rate, etc.
-                if hasattr(config, attr_name):
-                    setattr(config, attr_name, value)
-            elif key.startswith('text_'):
-                attr_name = key  # text_add_space_after, etc.
-                if hasattr(config, attr_name):
-                    setattr(config, attr_name, value)
-            elif key.startswith('ui_'):
-                attr_name = key  # ui_show_notifications, etc.
-                if hasattr(config, attr_name):
-                    setattr(config, attr_name, value)
+            else:
+                # Check prefixed attributes
+                for prefix in attribute_prefixes:
+                    if key.startswith(prefix) and hasattr(config, key):
+                        setattr(config, key, value)
+                        break
         
-        return config
-    
-    return from_callable(_load_config)
+        return Success(config)
+    except Exception as e:
+        return Failure(e)
+
+
+def load_config_from_file(config_path: str) -> Result[ClientConfig, Exception]:
+    """Load configuration from file using functional composition"""
+    return (
+        _read_config_file(config_path)
+        .flat_map(_validate_config_dict)
+        .flat_map(_create_config_from_dict)
+    )
 
 
 async def main():
@@ -662,7 +899,7 @@ async def main():
         show_gui = False
     
     # Create and run application
-    app = VoiceClientApplication(config, show_gui=show_gui)
+    app = VoiceClientApplication(config, show_gui=show_gui, config_file=args.config)
     
     try:
         result = await app.run()
