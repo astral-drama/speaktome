@@ -656,10 +656,11 @@ class MainWindow:
             
             logger.info(f"Converting hotkey '{hotkey}' to tkinter format: '{tk_hotkey}'")
             
-            # Bind the hotkey to the main window
-            self.root.bind_all(tk_hotkey, self._on_gui_hotkey)
+            # Note: Disabling GUI hotkey binding to prevent double firing with global hotkeys
+            # Global hotkeys work across all applications, so GUI binding is redundant
+            # self.root.bind_all(tk_hotkey, self._on_gui_hotkey)
             
-            logger.info(f"GUI hotkey bound: {tk_hotkey} (fallback for global hotkey)")
+            logger.info(f"GUI hotkey disabled to prevent conflicts with global hotkey: {tk_hotkey}")
             
         except Exception as e:
             logger.error(f"Failed to setup GUI hotkeys: {e}")

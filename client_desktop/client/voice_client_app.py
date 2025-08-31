@@ -277,7 +277,7 @@ class VoiceClientApplication:
                 return Failure(Exception(f"Text injection provider initialization failed: {text_init.error}"))
             
             # Initialize hotkey handler
-            hotkey_handler = PynputHotkeyHandler()
+            hotkey_handler = PynputHotkeyHandler(main_loop=self.main_loop)
             hotkey_init = await hotkey_handler.initialize()
             if hotkey_init.is_failure():
                 return Failure(Exception(f"Hotkey handler initialization failed: {hotkey_init.error}"))

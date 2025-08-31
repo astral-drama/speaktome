@@ -59,11 +59,12 @@ class PynputHotkeyHandler(HotkeyHandler):
     and event-driven architecture matching server patterns.
     """
     
-    def __init__(self):
+    def __init__(self, main_loop=None):
         self.hotkeys: Dict[str, HotKey] = {}
         self.callbacks: Dict[str, Callable[[], None]] = {}
         self.listener: Optional[Listener] = None
         self._active = False
+        self.main_loop = main_loop  # Reference to main asyncio event loop
         
         self.event_bus = get_event_bus()
         
@@ -195,12 +196,9 @@ class PynputHotkeyHandler(HotkeyHandler):
             
             # Publish hotkey event (thread-safe)
             try:
-                import threading
-                # Get the main event loop (thread-safe)
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Schedule the coroutine in the main thread
-                    loop.call_soon_threadsafe(
+                if self.main_loop and not self.main_loop.is_closed():
+                    # Schedule the coroutine in the main thread using stored loop reference
+                    self.main_loop.call_soon_threadsafe(
                         lambda: asyncio.create_task(
                             self.event_bus.publish(HotkeyPressedEvent(
                                 hotkey_combination=combination,
@@ -210,7 +208,7 @@ class PynputHotkeyHandler(HotkeyHandler):
                         )
                     )
                 else:
-                    logger.warning("Event loop not running - cannot publish hotkey event")
+                    logger.warning("Main event loop not available - cannot publish hotkey event")
             except Exception as e:
                 logger.warning(f"Failed to publish hotkey event: {e}")
             
