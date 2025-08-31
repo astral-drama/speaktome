@@ -111,7 +111,7 @@ class PyAudioProvider(AudioProvider):
         return result.map(lambda _: None)
     
     async def start_recording(self) -> Result[None, Exception]:
-        """Start audio recording"""
+        """Start audio recording with automatic recovery from sleep/device issues"""
         if self._is_recording:
             return Failure(Exception("Already recording"))
         
@@ -122,14 +122,40 @@ class PyAudioProvider(AudioProvider):
             self.frames = []
             self._recording_start_time = time.time()
             
-            self.stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=self.input_device,
-                frames_per_buffer=self.chunk_size
-            )
+            try:
+                self.stream = self.audio.open(
+                    format=self.format,
+                    channels=self.channels,
+                    rate=self.sample_rate,
+                    input=True,
+                    input_device_index=self.input_device,
+                    frames_per_buffer=self.chunk_size
+                )
+            except Exception as e:
+                # Check if this is a PortAudio device error (common after laptop sleep)
+                if "Internal PortAudio error" in str(e) or "-9986" in str(e):
+                    logger.warning(f"PortAudio device error detected: {e}")
+                    logger.info("Attempting to reinitialize audio system...")
+                    
+                    # Try to recover by reinitializing PyAudio
+                    try:
+                        self._recover_audio_system()
+                        
+                        # Retry opening the stream after recovery
+                        self.stream = self.audio.open(
+                            format=self.format,
+                            channels=self.channels,
+                            rate=self.sample_rate,
+                            input=True,
+                            input_device_index=self.input_device,
+                            frames_per_buffer=self.chunk_size
+                        )
+                        logger.info("✅ Audio system recovery successful")
+                    except Exception as recovery_error:
+                        raise Exception(f"Audio recovery failed: {recovery_error}. Original error: {e}")
+                else:
+                    # Non-recoverable error
+                    raise e
             
             self._is_recording = True
             
@@ -223,6 +249,39 @@ class PyAudioProvider(AudioProvider):
             logger.error(f"Failed to stop recording: {result.error}")
         
         return result
+    
+    def _recover_audio_system(self):
+        """Recover audio system after device errors (e.g., after laptop sleep)"""
+        logger.info("🔄 Recovering audio system...")
+        
+        # Clean up existing audio instance
+        if self.audio:
+            try:
+                self.audio.terminate()
+            except Exception as e:
+                logger.debug(f"Error terminating old PyAudio instance (ignored): {e}")
+        
+        # Wait a moment for system to settle
+        time.sleep(0.5)
+        
+        # Create new PyAudio instance
+        self.audio = pyaudio.PyAudio()
+        
+        # Log available devices after recovery
+        try:
+            device_count = self.audio.get_device_count()
+            logger.info(f"Audio recovery: Found {device_count} devices after recovery")
+            
+            # If we had a specific input device, validate it still exists
+            if self.input_device is not None:
+                if self.input_device >= device_count:
+                    logger.warning(f"Previous input device {self.input_device} no longer available, using default")
+                    self.input_device = None
+                else:
+                    device_info = self.audio.get_device_info_by_index(self.input_device)
+                    logger.info(f"Verified input device {self.input_device}: {device_info['name']}")
+        except Exception as e:
+            logger.warning(f"Could not enumerate devices after recovery: {e}")
     
     def _read_audio_data(self):
         """Background thread method to continuously read audio data"""

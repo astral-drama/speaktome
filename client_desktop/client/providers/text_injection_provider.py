@@ -125,7 +125,7 @@ class PyAutoGUIProvider(TextInjectionProvider):
                 logger.error(f"Failed to inject text: {result.error}")
                 raise result.error
         
-        return await from_callable(_inject_text)
+        return from_callable(_inject_text)
     
     async def inject_text_with_formatting(self, text: str, **options) -> Result[None, Exception]:
         """Inject text with additional formatting options"""

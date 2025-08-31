@@ -14,7 +14,7 @@ import time
 from typing import Optional, Dict, Any
 
 import websockets
-from websockets.exceptions import ConnectionClosed, WebSocketException
+from websockets.exceptions import ConnectionClosed, WebSocketException, ConnectionClosedError, ConnectionClosedOK
 
 from shared.functional import Result, Success, Failure, from_async_callable
 from shared.events import get_event_bus, ConnectionStatusEvent, TranscriptionReceivedEvent, TranscriptionRequestedEvent
@@ -37,7 +37,8 @@ class TranscriptionClient:
         self.connected = False
         self.connection_attempts = 0
         self.max_connection_attempts = 3
-        self.reconnect_delay = 2.0
+        self.reconnect_delay = 0.5
+        self.transcription_timeout = 15.0
         
         self.event_bus = get_event_bus()
         
@@ -54,7 +55,11 @@ class TranscriptionClient:
             try:
                 self.websocket = await websockets.connect(
                     self.server_url,
-                    max_size=10**7  # 10MB max message size for audio
+                    max_size=10**7,  # 10MB max message size for audio
+                    ping_interval=15,  # Send ping every 15 seconds
+                    ping_timeout=5,    # Wait 5 seconds for pong
+                    close_timeout=3,   # Wait 3 seconds for close handshake
+                    open_timeout=5     # 5 second connection timeout
                 )
                 
                 self.connected = True
@@ -77,8 +82,13 @@ class TranscriptionClient:
         """Disconnect from the server"""
         async def _disconnect():
             if self.websocket:
-                await self.websocket.close()
-                self.websocket = None
+                try:
+                    await self.websocket.close()
+                except Exception as e:
+                    # Ignore errors when closing - connection might already be dead
+                    logger.debug(f"Error during websocket close (ignored): {e}")
+                finally:
+                    self.websocket = None
             
             self.connected = False
             await self._publish_connection_status("disconnected")
@@ -88,12 +98,50 @@ class TranscriptionClient:
     
     async def transcribe_audio(self, audio_data: AudioData, model: str = "base", language: str = "auto") -> Result[str, Exception]:
         """Send audio for transcription and return the result"""
-        if not self.connected or not self.websocket:
-            # Try to reconnect
-            connection_result = await self.connect()
-            if connection_result.is_failure():
-                return Failure(Exception(f"Not connected to server: {connection_result.error}"))
+        # Ensure we have a valid connection
+        connection_result = await self._ensure_connection()
+        if connection_result.is_failure():
+            return Failure(Exception(f"Failed to establish connection: {connection_result.error}"))
         
+        # Try transcription with automatic retry on connection errors
+        for attempt in range(2):  # Try twice
+            try:
+                return await self._attempt_transcription(audio_data, model, language)
+            except (ConnectionClosed, ConnectionClosedError, ConnectionClosedOK, WebSocketException) as e:
+                logger.warning(f"Connection lost during transcription (attempt {attempt + 1}): {e}")
+                self.connected = False
+                
+                # Try to reconnect for second attempt
+                if attempt == 0:
+                    logger.info("Attempting to reconnect and retry transcription...")
+                    connection_result = await self._ensure_connection()
+                    if connection_result.is_failure():
+                        return Failure(Exception(f"Failed to reconnect: {connection_result.error}"))
+                else:
+                    return Failure(Exception(f"Transcription failed after connection retry: {e}"))
+            except Exception as e:
+                # Non-connection errors don't need retry
+                return Failure(e)
+        
+        return Failure(Exception("Transcription failed after all retry attempts"))
+    
+    async def _ensure_connection(self) -> Result[None, Exception]:
+        """Ensure we have a valid connection, reconnecting if necessary"""
+        if not self.connected or not self.websocket:
+            return await self.connect()
+        
+        # Test if connection is still alive
+        try:
+            await self.websocket.ping()
+            return Success(None)
+        except Exception:
+            # Connection is dead, reconnect
+            logger.info("Connection test failed, reconnecting...")
+            self.connected = False
+            return await self.connect()
+    
+    async def _attempt_transcription(self, audio_data: AudioData, model: str, language: str) -> Result[str, Exception]:
+        """Single transcription attempt"""
         async def _transcribe():
             # Publish transcription request event
             await self.event_bus.publish(TranscriptionRequestedEvent(
@@ -122,23 +170,28 @@ class TranscriptionClient:
             }
             
             # Send request
-            await self.websocket.send(json.dumps(request))
-            logger.debug(f"Sent transcription request: {len(audio_data.data)} bytes, model={model}")
+            try:
+                await self.websocket.send(json.dumps(request))
+                logger.debug(f"Sent transcription request: {len(audio_data.data)} bytes, model={model}")
+            except (ConnectionClosed, ConnectionClosedError, ConnectionClosedOK, WebSocketException) as e:
+                self.connected = False
+                await self._publish_connection_status("disconnected")
+                raise e
             
             # Wait for response with timeout - may need to skip connection messages
             try:
                 while True:
                     response_str = await asyncio.wait_for(
                         self.websocket.recv(),
-                        timeout=30.0  # 30 second timeout for transcription
+                        timeout=self.transcription_timeout
                     )
                     
                     response = json.loads(response_str)
-                    logger.info(f"Received WebSocket response: {response}")
+                    logger.debug(f"Received WebSocket response: {response}")
                     
                     # Skip connection status messages and wait for transcription
                     if response.get("type") == "connection":
-                        logger.info("Skipping connection message, waiting for transcription...")
+                        logger.debug("Skipping connection message, waiting for transcription...")
                         continue
                     
                     # Process transcription response
@@ -168,13 +221,14 @@ class TranscriptionClient:
                         raise Exception(f"Unexpected response type: {response.get('type')}")
                     
             except asyncio.TimeoutError:
-                raise Exception("Transcription request timed out")
+                raise Exception(f"Transcription request timed out after {self.transcription_timeout}s")
             except json.JSONDecodeError as e:
                 raise Exception(f"Invalid JSON response: {e}")
-            except ConnectionClosed:
+            except (ConnectionClosed, ConnectionClosedError, ConnectionClosedOK, WebSocketException) as e:
                 self.connected = False
                 await self._publish_connection_status("disconnected")
-                raise Exception("Connection lost during transcription")
+                # Re-raise connection errors to be handled by retry logic
+                raise e
         
         return await from_async_callable(_transcribe)
     
