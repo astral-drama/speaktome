@@ -668,7 +668,9 @@ class VoiceClientApplication:
             self.gui_main_window.settings_window = self.gui_settings_window
             
             # Subscribe to transcription events to update history
-            self.event_bus.subscribe("transcription.received", self._handle_gui_transcription)
+            # Note: MainWindow handles its own transcription history via _handle_transcription_received
+            # No need for duplicate subscription here
+            # self.event_bus.subscribe("transcription.received", self._handle_gui_transcription)
             
             logger.info("GUI components initialized")
             return Success(None)
@@ -677,18 +679,8 @@ class VoiceClientApplication:
             logger.error(f"GUI initialization failed: {e}")
             return Failure(e)
     
-    def _handle_gui_transcription(self, event: TranscriptionReceivedEvent) -> Result[None, Exception]:
-        """Handle transcription for GUI history"""
-        if self.gui_history_window:
-            self.gui_history_window.add_transcription(
-                event.text, 
-                {
-                    'language': event.language,
-                    'processing_time': event.processing_time,
-                    'confidence': event.confidence
-                }
-            )
-        return Success(None)
+    # Note: Removed _handle_gui_transcription to prevent duplicate history entries
+    # MainWindow now handles all transcription history management directly
     
     def _on_gui_settings_changed(self, new_settings: Dict[str, Any]) -> None:
         """Handle settings changes from GUI"""

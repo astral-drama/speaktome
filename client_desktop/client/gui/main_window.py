@@ -580,6 +580,8 @@ class MainWindow:
     def _show_full_history(self) -> None:
         """Show full history window"""
         if hasattr(self, 'history_window') and self.history_window:
+            # Clear any old data and populate with current history
+            self.history_window.transcriptions = self.transcription_history.copy()
             self.history_window.show(self.root)
     
     def _clear_transcription_history(self) -> None:
