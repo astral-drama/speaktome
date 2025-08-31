@@ -152,9 +152,9 @@ class MainWindow:
         """Create the main GUI window"""
         self.root = tk.Tk()
         self.root.title("SpeakToMe Voice Client")
-        self.root.geometry("500x400")
+        self.root.geometry("600x200")
         self.root.resizable(True, True)
-        self.root.minsize(450, 350)  # Set minimum size
+        self.root.minsize(550, 200)  # Set minimum size
         
         # Keep window on top (can be toggled)
         self.always_on_top = True
@@ -172,21 +172,11 @@ class MainWindow:
     def _create_widgets(self) -> None:
         """Create all GUI widgets using functional composition"""
         # Compose UI sections using pure functions
-        header_widgets = self._create_header_widgets()
-        instruction_widgets = self._create_instruction_widgets()
         control_widgets = self._create_control_widgets()
         transcription_widgets = self._create_transcription_widgets()
         history_control_widgets = self._create_history_control_widgets(transcription_widgets['transcription_frame'])
         
         # Store widget references (preserving original interface)
-        self.header_frame = header_widgets['header_frame']
-        self.title_label = header_widgets['title_label']
-        self.connection_indicator = header_widgets['connection_indicator']
-        self.status_label = header_widgets['status_label']
-        
-        self.instruction_frame = instruction_widgets['instruction_frame']
-        self.instruction_label = instruction_widgets['instruction_label']
-        
         self.control_frame = control_widgets['control_frame']
         self.record_button = control_widgets['record_button']
         self.settings_button = control_widgets['settings_button']
@@ -201,38 +191,32 @@ class MainWindow:
         self.copy_selected_button = history_control_widgets['copy_selected_button']
         self.view_all_button = history_control_widgets['view_all_button']
         self.clear_history_button = history_control_widgets['clear_history_button']
+        self.connection_indicator = history_control_widgets['connection_indicator']
+        self.status_label = history_control_widgets['status_label']
     
     def _setup_layout(self) -> None:
         """Setup widget layout"""
-        # Header layout
-        self.header_frame.pack(fill=tk.X, padx=10, pady=5)
-        self.title_label.pack(side=tk.LEFT)
-        self.status_label.pack(side=tk.RIGHT)
-        self.connection_indicator.pack(side=tk.RIGHT, padx=(0, 5))
-        
-        # Instruction layout
-        self.instruction_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-        self.instruction_label.pack()
-        
         # Control layout
-        self.control_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.control_frame.pack(fill=tk.X, padx=5, pady=2)
         self.record_button.pack(side=tk.LEFT, padx=(0, 10))
         self.settings_button.pack(side=tk.LEFT, padx=(0, 5))
         self.topmost_button.pack(side=tk.LEFT)
         
         # Transcription layout
-        self.transcription_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.transcription_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
         
         # History listbox with scrollbar
-        self.history_listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.history_listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
         self.history_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.history_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # History control buttons
-        self.history_button_frame.pack(fill=tk.X)
+        # History control buttons with connection status
+        self.history_button_frame.pack(fill=tk.X, pady=2)
         self.copy_selected_button.pack(side=tk.LEFT, padx=(0, 5))
         self.view_all_button.pack(side=tk.LEFT, padx=5)
         self.clear_history_button.pack(side=tk.LEFT, padx=5)
+        self.status_label.pack(side=tk.RIGHT)
+        self.connection_indicator.pack(side=tk.RIGHT, padx=(0, 5))
     
     def _process_gui_updates(self) -> None:
         """Process queued GUI updates"""
@@ -342,40 +326,6 @@ class MainWindow:
             logger.error(f"Failed to {action} recording: {result.error}")
     
     # Pure UI builder functions (functional composition)
-    def _create_header_widgets(self) -> Dict[str, Any]:
-        """Pure function to create header widgets"""
-        header_frame = ttk.Frame(self.root)
-        title_label = ttk.Label(header_frame, text="🎤 SpeakToMe", font=('Arial', 14, 'bold'))
-        connection_indicator = ttk.Label(header_frame, text="●", foreground="red")
-        status_label = ttk.Label(header_frame, text="Disconnected", font=('Arial', 9))
-        
-        return {
-            'header_frame': header_frame,
-            'title_label': title_label,
-            'connection_indicator': connection_indicator,
-            'status_label': status_label
-        }
-    
-    def _create_instruction_widgets(self) -> Dict[str, Any]:
-        """Pure function to create instruction widgets with hotkey display"""
-        instruction_frame = ttk.Frame(self.root)
-        
-        # Get hotkey with functional composition
-        hotkey = self._get_current_hotkey()
-        hotkey_display = self._format_hotkey_display(hotkey)
-        
-        instruction_label = ttk.Label(
-            instruction_frame,
-            text=f"💡 Focus here, press {hotkey_display} to record → text auto-types where you were!",
-            font=('Arial', 9),
-            foreground="blue"
-        )
-        
-        return {
-            'instruction_frame': instruction_frame,
-            'instruction_label': instruction_label
-        }
-    
     def _create_control_widgets(self) -> Dict[str, Any]:
         """Pure function to create control button widgets"""
         control_frame = ttk.Frame(self.root)
@@ -410,12 +360,12 @@ class MainWindow:
     
     def _create_transcription_widgets(self) -> Dict[str, Any]:
         """Pure function to create transcription history widgets"""
-        transcription_frame = ttk.LabelFrame(self.root, text="Transcription History", padding=10)
+        transcription_frame = ttk.Frame(self.root, padding=5)
         history_listbox_frame = ttk.Frame(transcription_frame)
         
         history_listbox = tk.Listbox(
             history_listbox_frame,
-            height=8,
+            height=4,
             width=60,
             font=('Arial', 9),
             selectmode=tk.SINGLE
@@ -455,11 +405,17 @@ class MainWindow:
             command=self._clear_transcription_history
         )
         
+        # Add connection status to the right side
+        connection_indicator = ttk.Label(history_button_frame, text="●", foreground="red")
+        status_label = ttk.Label(history_button_frame, text="Disconnected", font=('Arial', 9))
+        
         return {
             'history_button_frame': history_button_frame,
             'copy_selected_button': copy_selected_button,
             'view_all_button': view_all_button,
-            'clear_history_button': clear_history_button
+            'clear_history_button': clear_history_button,
+            'connection_indicator': connection_indicator,
+            'status_label': status_label
         }
     
     def _get_current_hotkey(self) -> str:
@@ -805,12 +761,6 @@ class MainWindow:
                     # Keep single character keys lowercase
                     parts.append(part.lower())
             hotkey_display = '+'.join(parts)
-            
-            # Update instruction label
-            if hasattr(self, 'instruction_label') and self.instruction_label:
-                new_text = f"💡 Focus here, press {hotkey_display} to record → text auto-types where you were!"
-                self.instruction_label.config(text=new_text)
-                logger.info(f"Updated GUI instruction text to show: {hotkey_display}")
             
             # Re-setup GUI hotkeys with new binding
             self._setup_gui_hotkeys()
