@@ -869,15 +869,9 @@ async def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
     parser.add_argument(
-        "--gui",
-        help="Show GUI window",
+        "--no-gui",
+        help="Run in headless mode without GUI (GUI is shown by default)",
         action="store_true",
-        default=False
-    )
-    parser.add_argument(
-        "--headless",
-        help="Run in headless mode (no GUI)",
-        action="store_true", 
         default=False
     )
     
@@ -905,10 +899,8 @@ async def main():
         config.logging_level = args.log_level
     
     # Determine GUI mode
-    show_gui = args.gui and not args.headless
-    if args.gui and args.headless:
-        print("⚠️ Warning: Both --gui and --headless specified. Using headless mode.")
-        show_gui = False
+    # GUI is shown by default, unless --no-gui is specified
+    show_gui = not args.no_gui
     
     # Create and run application
     app = VoiceClientApplication(config, show_gui=show_gui, config_file=args.config)

@@ -152,9 +152,10 @@ class MainWindow:
         """Create the main GUI window"""
         self.root = tk.Tk()
         self.root.title("SpeakToMe Voice Client")
-        self.root.geometry("600x200")
-        self.root.resizable(True, True)
-        self.root.minsize(550, 200)  # Set minimum size
+        # Adjusted height to ensure buttons aren't truncated: 3 lines * 15px + buttons ~35px + padding ~20px = ~105px
+        self.root.geometry("600x105")
+        self.root.resizable(True, True)  # Allow both horizontal and vertical resize
+        self.root.minsize(550, 105)  # Set minimum size ensuring buttons are visible
         
         # Keep window on top (can be toggled)
         self.always_on_top = True
@@ -172,51 +173,39 @@ class MainWindow:
     def _create_widgets(self) -> None:
         """Create all GUI widgets using functional composition"""
         # Compose UI sections using pure functions
-        control_widgets = self._create_control_widgets()
         transcription_widgets = self._create_transcription_widgets()
-        history_control_widgets = self._create_history_control_widgets(transcription_widgets['transcription_frame'])
-        
-        # Store widget references (preserving original interface)
-        self.control_frame = control_widgets['control_frame']
-        self.record_button = control_widgets['record_button']
-        self.settings_button = control_widgets['settings_button']
-        self.topmost_button = control_widgets['topmost_button']
-        
+        bottom_control_widgets = self._create_bottom_control_widgets(transcription_widgets['transcription_frame'])
+
+        # Store widget references
         self.transcription_frame = transcription_widgets['transcription_frame']
         self.history_listbox_frame = transcription_widgets['history_listbox_frame']
         self.history_listbox = transcription_widgets['history_listbox']
         self.history_scrollbar = transcription_widgets['history_scrollbar']
-        
-        self.history_button_frame = history_control_widgets['history_button_frame']
-        self.copy_selected_button = history_control_widgets['copy_selected_button']
-        self.view_all_button = history_control_widgets['view_all_button']
-        self.clear_history_button = history_control_widgets['clear_history_button']
-        self.connection_indicator = history_control_widgets['connection_indicator']
-        self.status_label = history_control_widgets['status_label']
+
+        self.bottom_control_frame = bottom_control_widgets['bottom_control_frame']
+        self.record_button = bottom_control_widgets['record_button']
+        self.copy_selected_button = bottom_control_widgets['copy_selected_button']
+        self.menu_button = bottom_control_widgets['menu_button']
+        self.connection_indicator = bottom_control_widgets['connection_indicator']
+        self.status_label = bottom_control_widgets['status_label']
     
     def _setup_layout(self) -> None:
         """Setup widget layout"""
-        # Control layout
-        self.control_frame.pack(fill=tk.X, padx=5, pady=2)
-        self.record_button.pack(side=tk.LEFT, padx=(0, 10))
-        self.settings_button.pack(side=tk.LEFT, padx=(0, 5))
-        self.topmost_button.pack(side=tk.LEFT)
-        
         # Transcription layout
-        self.transcription_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
-        
+        self.transcription_frame.pack(fill=tk.BOTH, expand=True, padx=3, pady=1)
+
         # History listbox with scrollbar
-        self.history_listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        self.history_listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2))
         self.history_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.history_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # History control buttons with connection status
-        self.history_button_frame.pack(fill=tk.X, pady=2)
-        self.copy_selected_button.pack(side=tk.LEFT, padx=(0, 5))
-        self.view_all_button.pack(side=tk.LEFT, padx=5)
-        self.clear_history_button.pack(side=tk.LEFT, padx=5)
+
+        # Bottom control panel with main buttons and menu
+        self.bottom_control_frame.pack(fill=tk.X, pady=1)
+        self.record_button.pack(side=tk.LEFT, padx=(0, 3))
+        self.copy_selected_button.pack(side=tk.LEFT, padx=(0, 3))
+        self.menu_button.pack(side=tk.LEFT, padx=3)
         self.status_label.pack(side=tk.RIGHT)
-        self.connection_indicator.pack(side=tk.RIGHT, padx=(0, 5))
+        self.connection_indicator.pack(side=tk.RIGHT, padx=(0, 3))
     
     def _process_gui_updates(self) -> None:
         """Process queued GUI updates"""
@@ -326,41 +315,47 @@ class MainWindow:
             logger.error(f"Failed to {action} recording: {result.error}")
     
     # Pure UI builder functions (functional composition)
-    def _create_control_widgets(self) -> Dict[str, Any]:
-        """Pure function to create control button widgets"""
-        control_frame = ttk.Frame(self.root)
-        
+    def _create_bottom_control_widgets(self, transcription_frame) -> Dict[str, Any]:
+        """Pure function to create bottom control panel with main buttons and menu"""
+        bottom_control_frame = ttk.Frame(transcription_frame)
+
         record_button = ttk.Button(
-            control_frame,
+            bottom_control_frame,
             text="🎙️ Start Recording",
             command=self._toggle_recording,
             width=20
         )
-        
-        settings_button = ttk.Button(
-            control_frame,
-            text="⚙️ Settings",
-            command=self._show_settings,
-            width=15
+
+        copy_selected_button = ttk.Button(
+            bottom_control_frame,
+            text="📋 Copy Selected",
+            command=self._copy_selected_transcription,
+            state=tk.DISABLED
         )
-        
-        topmost_button = ttk.Button(
-            control_frame,
-            text="📌 On Top",
-            command=self._toggle_always_on_top,
-            width=12
+
+        menu_button = ttk.Button(
+            bottom_control_frame,
+            text="☰ Menu",
+            command=self._show_hamburger_menu,
+            width=8
         )
-        
+
+        # Connection status indicators
+        connection_indicator = ttk.Label(bottom_control_frame, text="●", foreground="red")
+        status_label = ttk.Label(bottom_control_frame, text="Disconnected", font=('Arial', 9))
+
         return {
-            'control_frame': control_frame,
+            'bottom_control_frame': bottom_control_frame,
             'record_button': record_button,
-            'settings_button': settings_button,
-            'topmost_button': topmost_button
+            'copy_selected_button': copy_selected_button,
+            'menu_button': menu_button,
+            'connection_indicator': connection_indicator,
+            'status_label': status_label
         }
     
     def _create_transcription_widgets(self) -> Dict[str, Any]:
         """Pure function to create transcription history widgets"""
-        transcription_frame = ttk.Frame(self.root, padding=5)
+        transcription_frame = ttk.Frame(self.root, padding=2)
         history_listbox_frame = ttk.Frame(transcription_frame)
         
         history_listbox = tk.Listbox(
@@ -368,7 +363,8 @@ class MainWindow:
             height=4,
             width=60,
             font=('Arial', 9),
-            selectmode=tk.SINGLE
+            selectmode=tk.SINGLE,
+            exportselection=False  # Prevent selection clearing
         )
         history_listbox.bind('<<ListboxSelect>>', self._on_history_select)
         
@@ -382,41 +378,6 @@ class MainWindow:
             'history_scrollbar': history_scrollbar
         }
     
-    def _create_history_control_widgets(self, transcription_frame) -> Dict[str, Any]:
-        """Pure function to create history control button widgets"""
-        history_button_frame = ttk.Frame(transcription_frame)
-        
-        copy_selected_button = ttk.Button(
-            history_button_frame,
-            text="📋 Copy Selected",
-            command=self._copy_selected_transcription,
-            state=tk.DISABLED
-        )
-        
-        view_all_button = ttk.Button(
-            history_button_frame,
-            text="📚 View All History",
-            command=self._show_full_history
-        )
-        
-        clear_history_button = ttk.Button(
-            history_button_frame,
-            text="🗑️ Clear History",
-            command=self._clear_transcription_history
-        )
-        
-        # Add connection status to the right side
-        connection_indicator = ttk.Label(history_button_frame, text="●", foreground="red")
-        status_label = ttk.Label(history_button_frame, text="Disconnected", font=('Arial', 9))
-        
-        return {
-            'history_button_frame': history_button_frame,
-            'copy_selected_button': copy_selected_button,
-            'view_all_button': view_all_button,
-            'clear_history_button': clear_history_button,
-            'connection_indicator': connection_indicator,
-            'status_label': status_label
-        }
     
     def _get_current_hotkey(self) -> str:
         """Pure function to get current hotkey"""
@@ -726,19 +687,50 @@ class MainWindow:
         except Exception as e:
             logger.error(f"Failed to handle GUI hotkey: {e}")
     
+    def _show_hamburger_menu(self) -> None:
+        """Show hamburger menu with secondary options"""
+        try:
+            menu = tk.Menu(self.root, tearoff=0)
+
+            # Settings option
+            menu.add_command(label="⚙️ Settings", command=self._show_settings)
+
+            # View All History option
+            menu.add_command(label="📚 View All History", command=self._show_full_history)
+
+            # Clear History option
+            menu.add_command(label="🗑️ Clear History", command=self._clear_transcription_history)
+
+            menu.add_separator()
+
+            # Always on top toggle
+            if self.always_on_top:
+                menu.add_command(label="📌 Disable Always on Top", command=self._toggle_always_on_top)
+            else:
+                menu.add_command(label="📌 Enable Always on Top", command=self._toggle_always_on_top)
+
+            # Show the menu at the button location
+            try:
+                x = self.menu_button.winfo_rootx()
+                y = self.menu_button.winfo_rooty() + self.menu_button.winfo_height()
+                menu.post(x, y)
+            finally:
+                menu.grab_release()
+
+        except Exception as e:
+            logger.error(f"Failed to show hamburger menu: {e}")
+
     def _toggle_always_on_top(self) -> None:
         """Toggle window always-on-top behavior"""
         try:
             self.always_on_top = not self.always_on_top
             self.root.attributes('-topmost', self.always_on_top)
-            
+
             if self.always_on_top:
-                self.topmost_button.config(text="📌 On Top")
                 logger.info("Window set to always on top")
             else:
-                self.topmost_button.config(text="📌 Normal")
                 logger.info("Window set to normal behavior")
-                
+
         except Exception as e:
             logger.error(f"Failed to toggle always on top: {e}")
     

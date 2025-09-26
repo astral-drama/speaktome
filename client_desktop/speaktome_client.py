@@ -76,7 +76,7 @@ try:
     print()
     print("Features:")
     print("  🔥 Global Hotkeys - Press Ctrl+Shift+W anywhere to record")
-    print("  🖥️  GUI Interface - Visual status and controls (use --gui)")
+    print("  🖥️  GUI Interface - Visual status and controls (default, use --no-gui to disable)")
     print("  🎵 Cross-Platform Audio - Works on macOS, Linux, Windows")
     print("  📝 Text Injection - Types directly into active window")
     print("  ⚡ Real-Time Transcription - WebSocket connection to server")
