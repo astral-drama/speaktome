@@ -61,6 +61,7 @@ class MainWindow:
         self.record_button: Optional[tk.Button] = None
         self.transcription_text: Optional[tk.Text] = None
         self.copy_button: Optional[tk.Button] = None
+        self._active_menu: Optional[tk.Menu] = None
         
         logger.info("Main GUI window initialized")
     
@@ -690,32 +691,64 @@ class MainWindow:
     def _show_hamburger_menu(self) -> None:
         """Show hamburger menu with secondary options"""
         try:
+            # Store reference to menu for proper cleanup
+            if hasattr(self, '_active_menu') and self._active_menu:
+                self._active_menu.destroy()
+
             menu = tk.Menu(self.root, tearoff=0)
+            self._active_menu = menu
+
+            # Create wrapper functions that close the menu after action
+            def close_menu_and_execute(action):
+                def wrapper():
+                    try:
+                        menu.unpost()
+                        menu.destroy()
+                        self._active_menu = None
+                    except:
+                        pass
+                    # Small delay to ensure menu is closed before action
+                    self.root.after(50, action)
+                return wrapper
 
             # Settings option
-            menu.add_command(label="⚙️ Settings", command=self._show_settings)
+            menu.add_command(label="⚙️ Settings", command=close_menu_and_execute(self._show_settings))
 
             # View All History option
-            menu.add_command(label="📚 View All History", command=self._show_full_history)
+            menu.add_command(label="📚 View All History", command=close_menu_and_execute(self._show_full_history))
 
             # Clear History option
-            menu.add_command(label="🗑️ Clear History", command=self._clear_transcription_history)
+            menu.add_command(label="🗑️ Clear History", command=close_menu_and_execute(self._clear_transcription_history))
 
             menu.add_separator()
 
             # Always on top toggle
             if self.always_on_top:
-                menu.add_command(label="📌 Disable Always on Top", command=self._toggle_always_on_top)
+                menu.add_command(label="📌 Disable Always on Top", command=close_menu_and_execute(self._toggle_always_on_top))
             else:
-                menu.add_command(label="📌 Enable Always on Top", command=self._toggle_always_on_top)
+                menu.add_command(label="📌 Enable Always on Top", command=close_menu_and_execute(self._toggle_always_on_top))
 
             # Show the menu at the button location
-            try:
-                x = self.menu_button.winfo_rootx()
-                y = self.menu_button.winfo_rooty() + self.menu_button.winfo_height()
-                menu.post(x, y)
-            finally:
-                menu.grab_release()
+            x = self.menu_button.winfo_rootx()
+            y = self.menu_button.winfo_rooty() + self.menu_button.winfo_height()
+
+            # Use tk_popup for proper menu behavior
+            menu.tk_popup(x, y)
+
+            # Set up click-outside detection
+            def close_on_click_outside(event):
+                try:
+                    # Check if click is outside menu
+                    if event.widget != menu:
+                        menu.unpost()
+                        menu.destroy()
+                        self._active_menu = None
+                        self.root.unbind_all('<Button-1>')
+                except:
+                    pass
+
+            # Bind to detect clicks outside menu
+            self.root.after(100, lambda: self.root.bind_all('<Button-1>', close_on_click_outside))
 
         except Exception as e:
             logger.error(f"Failed to show hamburger menu: {e}")
