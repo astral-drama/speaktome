@@ -87,25 +87,25 @@ class PyAutoGUIProvider(TextInjectionProvider):
     
     async def inject_text(self, text: str, **options) -> Result[None, Exception]:
         """Inject text into the active window"""
-        async def _inject_text():
+        try:
             # Process text based on settings
             processed_text = self._process_text(text, options)
-            
+
             # Small delay to ensure window focus
             injection_delay = options.get('delay', 0.1)
             if injection_delay > 0:
                 await asyncio.sleep(injection_delay)
-            
+
             # Inject text using PyAutoGUI
             def _type_text():
                 pyautogui.typewrite(processed_text, interval=self.typing_delay)
                 return len(processed_text)
-            
+
             result = from_callable(_type_text)
-            
+
             if result.is_success():
                 chars_typed = result.value
-                
+
                 # Publish event
                 await self.event_bus.publish(TextInjectedEvent(
                     text=processed_text,
@@ -118,14 +118,15 @@ class PyAutoGUIProvider(TextInjectionProvider):
                         'typing_delay': self.typing_delay
                     }
                 ))
-                
+
                 logger.info(f"Text injected successfully: '{processed_text[:30]}...' ({chars_typed} chars)")
-                return None
+                return Success(None)
             else:
                 logger.error(f"Failed to inject text: {result.error}")
-                raise result.error
-        
-        return from_callable(_inject_text)
+                return result
+        except Exception as e:
+            logger.error(f"Exception in inject_text: {e}")
+            return Failure(e)
     
     async def inject_text_with_formatting(self, text: str, **options) -> Result[None, Exception]:
         """Inject text with additional formatting options"""

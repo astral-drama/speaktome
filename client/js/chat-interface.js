@@ -68,6 +68,8 @@ class ChatInterface {
         // Create content based on message type
         if (message.type === 'transcription') {
             contentDiv.appendChild(this.createTranscriptionContent(message));
+        } else if (message.type === 'tts') {
+            contentDiv.appendChild(this.createTTSContent(message));
         } else {
             const p = document.createElement('p');
             p.textContent = message.content;
@@ -135,6 +137,56 @@ class ChatInterface {
         
         container.appendChild(actionsDiv);
         
+        return container;
+    }
+
+    createTTSContent(message) {
+        const container = document.createElement('div');
+
+        // Add header with icon
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'message-header';
+
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-volume-up';
+        headerDiv.appendChild(icon);
+
+        const label = document.createElement('span');
+        label.className = 'message-label';
+        label.textContent = 'Text-to-Speech';
+        headerDiv.appendChild(label);
+
+        container.appendChild(headerDiv);
+
+        // Add text content
+        const textP = document.createElement('p');
+        textP.textContent = message.content;
+        textP.className = 'transcription-text';
+        container.appendChild(textP);
+
+        // Add metadata if available
+        if (message.voice) {
+            const metaDiv = document.createElement('div');
+            metaDiv.className = 'tts-meta';
+            metaDiv.style.cssText = 'font-size: 0.813rem; color: #6b7280; margin-top: 0.5rem;';
+            metaDiv.innerHTML = `<i class="fas fa-user"></i> Voice: ${message.voice}`;
+            container.appendChild(metaDiv);
+        }
+
+        // Add action buttons
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'message-actions';
+
+        // Copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn-action';
+        copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+        copyBtn.title = 'Copy to clipboard';
+        copyBtn.onclick = () => this.copyText(message.content);
+
+        actionsDiv.appendChild(copyBtn);
+        container.appendChild(actionsDiv);
+
         return container;
     }
 
@@ -250,6 +302,10 @@ class ChatInterface {
         return this.addSystemMessage('⏹️ Recording stopped. Processing audio...');
     }
 
+    addTTSMessage(text, metadata = {}) {
+        return this.addMessage('tts', text, metadata);
+    }
+
     addConnectionMessage(status) {
         const messages = {
             connecting: '🔗 Connecting to server...',
@@ -257,7 +313,7 @@ class ChatInterface {
             disconnected: '❌ Disconnected from server. Attempting to reconnect...',
             reconnecting: '🔄 Reconnecting to server...'
         };
-        
+
         return this.addSystemMessage(messages[status] || `Status: ${status}`);
     }
 

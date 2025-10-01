@@ -30,9 +30,15 @@ import uvicorn
 
 # Phase 3 imports
 from server.container import DependencyContainer, get_container
-from server.events import EventBus, get_event_bus, AudioUploadedEvent, TranscriptionCompletedEvent
+from server.events import (
+    EventBus, get_event_bus, AudioUploadedEvent, TranscriptionCompletedEvent,
+    TextSubmittedEvent, SynthesisCompletedEvent
+)
 from server.pipeline import (
     AudioData, ProcessingContext, create_default_pipeline, create_fast_pipeline, create_quality_pipeline
+)
+from server.pipeline.tts_pipeline import (
+    TextData, TTSContext, create_default_tts_pipeline, create_fast_tts_pipeline, create_quality_tts_pipeline
 )
 from server.connection import WebSocketConnectionManager
 # Routing components removed - WebSocket handling now integrated directly
@@ -73,6 +79,28 @@ class ModelInfo(BaseModel):
     pipeline_type: str
     description: str
 
+# TTS Pydantic models
+class SynthesisRequest(BaseModel):
+    text: str = Field(..., description="Text to synthesize")
+    voice: str = Field(default="default", description="Voice to use")
+    language: Optional[str] = Field(default=None, description="Language code")
+    speed: float = Field(default=1.0, description="Speech speed (0.5-2.0)")
+    output_format: str = Field(default="wav", description="Audio format (wav, mp3)")
+
+class SynthesisResponse(BaseModel):
+    id: str
+    status: str
+    audio_data: Optional[str] = None  # Base64 encoded audio
+    audio_format: Optional[str] = None
+    duration: Optional[float] = None
+    processing_time: Optional[float] = None
+    error: Optional[str] = None
+
+class VoiceInfo(BaseModel):
+    name: str
+    language: str
+    description: Optional[str] = None
+
 # Global configuration
 AVAILABLE_MODELS = ["base", "small", "medium"]
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -110,39 +138,52 @@ event_bus = None
 websocket_manager = None
 audio_validator = None
 pipeline = None
+tts_pipeline = None
+tts_provider = None
 status_provider = None
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize Phase 3 architecture components"""
-    global container, event_bus, websocket_manager, audio_validator, pipeline, status_provider
-    
+    global container, event_bus, websocket_manager, audio_validator, pipeline, tts_pipeline, tts_provider, status_provider
+
     logger.info("🚀 Starting Whisper Server with Phase 3 Architecture")
-    
+
     # Initialize dependency injection container
     container = DependencyContainer()
-    
+
     # Initialize event bus
     event_bus = EventBus()
     await event_bus.start()
     logger.info("✅ Event bus started")
-    
+
     # Initialize WebSocket manager
     websocket_manager = WebSocketConnectionManager()
     logger.info("✅ WebSocket manager initialized")
-    
+
     # Initialize audio validator
     audio_validator = create_audio_validator(max_size_mb=10.0)
     container.register_instance(type(audio_validator), audio_validator)
     logger.info("✅ Audio validator configured")
-    
-    # Initialize pipeline with real Whisper transcription
+
+    # Initialize STT pipeline with real Whisper transcription
     from server.providers.whisper_provider import WhisperTranscriptionProvider
     provider = WhisperTranscriptionProvider(default_model="base", max_workers=2)
     await provider.initialize()
     pipeline = create_default_pipeline(provider)
-    logger.info("✅ Audio processing pipeline initialized")
-    
+    logger.info("✅ STT audio processing pipeline initialized")
+
+    # Initialize TTS pipeline with Coqui TTS
+    from server.providers.coqui_tts_provider import CoquiTTSProvider
+    tts_provider = CoquiTTSProvider(device="cuda", max_workers=2)
+    tts_init_result = await tts_provider.initialize()
+    if tts_init_result.is_success():
+        tts_pipeline = create_default_tts_pipeline(tts_provider)
+        logger.info("✅ TTS processing pipeline initialized")
+    else:
+        logger.error(f"❌ TTS initialization failed: {tts_init_result.get_error()}")
+        logger.warning("⚠️  TTS endpoints will not be available")
+
     # Initialize status provider
     status_provider = get_server_status_provider()
     logger.info("✅ Status provider initialized")
@@ -165,19 +206,23 @@ async def startup_event():
 async def shutdown_event():
     """Clean up Phase 3 components"""
     logger.info("🛑 Shutting down Phase 3 server...")
-    
+
+    if tts_provider:
+        await tts_provider.shutdown()
+        logger.info("✅ TTS provider shutdown")
+
     if websocket_manager:
         await websocket_manager.shutdown()
         logger.info("✅ WebSocket manager shutdown")
-    
+
     if event_bus:
         await event_bus.stop()
         logger.info("✅ Event bus stopped")
-    
+
     if container:
         await container.dispose()
         logger.info("✅ Dependency container disposed")
-    
+
     logger.info("👋 Phase 3 server shutdown complete")
 
 async def save_uploaded_file(upload_file: UploadFile) -> Result[str, str]:
@@ -396,12 +441,12 @@ async def process_audio_async(request_id: str, audio_data: AudioData, context: P
 @app.get("/api/transcribe/{request_id}", response_model=TranscriptionResponse)
 async def get_transcription_result(request_id: str):
     """Get transcription result by request ID"""
-    
+
     if request_id not in active_transcriptions:
         raise HTTPException(status_code=404, detail="Transcription request not found")
-    
+
     transcription = active_transcriptions[request_id]
-    
+
     return TranscriptionResponse(
         id=request_id,
         status=transcription['status'],
@@ -410,6 +455,152 @@ async def get_transcription_result(request_id: str):
         processing_time=transcription.get('processing_time'),
         error=transcription.get('error')
     )
+
+# TTS API Endpoints
+
+# Global state for TTS
+active_syntheses: Dict[str, Dict[str, Any]] = {}
+
+@app.post("/api/synthesize", response_model=SynthesisResponse)
+async def synthesize_speech(request: SynthesisRequest):
+    """Synthesize speech from text through TTS pipeline"""
+
+    if not tts_pipeline:
+        raise HTTPException(status_code=503, detail="TTS service not available")
+
+    request_id = str(uuid.uuid4())
+
+    try:
+        # Fire text submitted event
+        submit_event = TextSubmittedEvent.create(
+            request_id=request_id,
+            text=request.text,
+            voice=request.voice,
+            client_id=request_id
+        )
+        await event_bus.publish(submit_event)
+
+        # Create text data
+        text_data = TextData(
+            text=request.text,
+            language=request.language
+        )
+
+        # Create TTS context
+        context = TTSContext(
+            request_id=request_id,
+            client_id=request_id,
+            voice=request.voice,
+            speed=request.speed,
+            output_format=request.output_format
+        )
+
+        # Store request info
+        active_syntheses[request_id] = {
+            'status': 'processing',
+            'start_time': time.time(),
+            'voice': request.voice
+        }
+
+        # Process through pipeline asynchronously
+        asyncio.create_task(process_synthesis_async(request_id, text_data, context))
+
+        return SynthesisResponse(
+            id=request_id,
+            status="processing"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in synthesize_speech: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def process_synthesis_async(request_id: str, text_data: TextData, context: TTSContext):
+    """Process synthesis through pipeline asynchronously"""
+    try:
+        # Process through TTS pipeline
+        result = await tts_pipeline.process(text_data, context)
+
+        if result.is_success():
+            audio_data = result.get_value()
+            processing_time = time.time() - active_syntheses[request_id]['start_time']
+
+            # Encode audio data to base64
+            audio_b64 = base64.b64encode(audio_data.data).decode('utf-8')
+
+            # Update synthesis status
+            active_syntheses[request_id].update({
+                'status': 'completed',
+                'audio_data': audio_b64,
+                'audio_format': audio_data.format,
+                'sample_rate': audio_data.sample_rate,
+                'processing_time': processing_time
+            })
+
+            # Fire completion event
+            completion_event = SynthesisCompletedEvent.create(
+                request_id=request_id,
+                audio_size=len(audio_data.data),
+                duration=audio_data.metadata.get('duration', 0.0),
+                processing_time=processing_time,
+                client_id=context.client_id
+            )
+            await event_bus.publish(completion_event)
+
+        else:
+            # Handle failure
+            error_message = result.get_error()
+            active_syntheses[request_id].update({
+                'status': 'failed',
+                'error': error_message
+            })
+
+    except Exception as e:
+        logger.error(f"❌ Error processing synthesis {request_id}: {e}")
+        active_syntheses[request_id].update({
+            'status': 'failed',
+            'error': str(e)
+        })
+
+@app.get("/api/synthesize/{request_id}", response_model=SynthesisResponse)
+async def get_synthesis_result(request_id: str):
+    """Get synthesis result by request ID"""
+
+    if request_id not in active_syntheses:
+        raise HTTPException(status_code=404, detail="Synthesis request not found")
+
+    synthesis = active_syntheses[request_id]
+
+    return SynthesisResponse(
+        id=request_id,
+        status=synthesis['status'],
+        audio_data=synthesis.get('audio_data'),
+        audio_format=synthesis.get('audio_format'),
+        processing_time=synthesis.get('processing_time'),
+        error=synthesis.get('error')
+    )
+
+@app.get("/api/voices", response_model=List[VoiceInfo])
+async def get_available_voices():
+    """Get available TTS voices"""
+
+    if not tts_provider:
+        raise HTTPException(status_code=503, detail="TTS service not available")
+
+    voices_result = await tts_provider.get_available_voices()
+
+    if voices_result.is_failure():
+        raise HTTPException(status_code=500, detail=voices_result.get_error())
+
+    voices = voices_result.get_value()
+
+    return [
+        VoiceInfo(
+            name=voice.name,
+            language=voice.language,
+            description=voice.description
+        )
+        for voice in voices
+    ]
 
 # WebSocket endpoints using Phase 3 WebSocket manager
 
@@ -561,17 +752,174 @@ async def _process_websocket_audio(websocket: WebSocket, data: dict, client_id: 
             "message": f"Audio processing failed: {str(e)}"
         })
 
+@app.websocket("/ws/synthesize")
+async def websocket_synthesize(websocket: WebSocket):
+    """WebSocket endpoint for real-time TTS synthesis"""
+    logger.info(f"🔌 TTS WebSocket connection attempt from {websocket.client}")
+
+    if not tts_pipeline:
+        logger.error("❌ TTS pipeline not available")
+        await websocket.close(code=1011, reason="TTS service not available")
+        return
+
+    try:
+        await websocket.accept()
+        client_id = str(uuid.uuid4())
+
+        logger.info(f"🔌 TTS WebSocket client {client_id} connected successfully")
+    except Exception as e:
+        logger.error(f"❌ TTS WebSocket accept failed: {e}")
+        return
+
+    try:
+        # Send welcome message
+        await websocket.send_json({
+            "type": "connection",
+            "status": "connected",
+            "client_id": client_id,
+            "message": "Ready for text-to-speech synthesis"
+        })
+
+        # Handle messages
+        while True:
+            try:
+                data = await websocket.receive_json()
+                message_type = data.get("type", "")
+
+                if message_type == "config":
+                    # Handle configuration
+                    await websocket.send_json({
+                        "type": "config",
+                        "status": "configured",
+                        "voice": data.get("voice", "default"),
+                        "speed": data.get("speed", 1.0)
+                    })
+
+                elif message_type == "text":
+                    # Handle text synthesis
+                    await _process_websocket_synthesis(websocket, data, client_id)
+
+                elif message_type == "ping":
+                    await websocket.send_json({
+                        "type": "pong",
+                        "timestamp": time.time()
+                    })
+
+            except Exception as e:
+                logger.error(f"❌ TTS WebSocket message error: {e}")
+                break
+
+    except Exception as e:
+        logger.error(f"❌ TTS WebSocket connection error: {e}")
+    finally:
+        logger.info(f"🔌 TTS WebSocket client {client_id} disconnected")
+
+async def _process_websocket_synthesis(websocket: WebSocket, data: dict, client_id: str):
+    """Process WebSocket text synthesis through TTS pipeline"""
+    try:
+        # Extract text data
+        text = data.get("text", "")
+        voice = data.get("voice", "default")
+        speed = data.get("speed", 1.0)
+        output_format = data.get("format", "wav")
+
+        if not text or not text.strip():
+            await websocket.send_json({
+                "type": "error",
+                "message": "No text provided"
+            })
+            return
+
+        # Create TextData object for TTS pipeline
+        text_data = TextData(
+            text=text,
+            language=data.get("language")
+        )
+
+        # Create TTS context
+        context = TTSContext(
+            request_id=str(uuid.uuid4()),
+            client_id=client_id,
+            voice=voice,
+            speed=speed,
+            output_format=output_format
+        )
+
+        start_time = time.time()
+
+        # Fire text submitted event
+        submit_event = TextSubmittedEvent.create(
+            request_id=context.request_id,
+            text=text,
+            voice=voice,
+            client_id=client_id
+        )
+        await event_bus.publish(submit_event)
+
+        # Process through TTS pipeline
+        result = await tts_pipeline.process(text_data, context)
+
+        processing_time = time.time() - start_time
+
+        if result.is_success():
+            audio_data = result.get_value()
+
+            # Encode audio to base64
+            audio_b64 = base64.b64encode(audio_data.data).decode('utf-8')
+
+            # Fire completion event
+            completion_event = SynthesisCompletedEvent.create(
+                request_id=context.request_id,
+                audio_size=len(audio_data.data),
+                duration=audio_data.metadata.get('duration', 0.0),
+                processing_time=processing_time,
+                client_id=client_id
+            )
+            await event_bus.publish(completion_event)
+
+            # Send successful synthesis response
+            await websocket.send_json({
+                "type": "audio",
+                "status": "completed",
+                "data": audio_b64,
+                "format": audio_data.format,
+                "sample_rate": audio_data.sample_rate,
+                "processing_time": processing_time,
+                "timestamp": time.time()
+            })
+
+        else:
+            # Handle pipeline failure
+            error_message = result.get_error()
+            logger.error(f"❌ TTS Pipeline failed for WebSocket text: {error_message}")
+
+            await websocket.send_json({
+                "type": "audio",
+                "status": "failed",
+                "error": error_message,
+                "processing_time": processing_time
+            })
+
+    except Exception as e:
+        logger.error(f"❌ WebSocket synthesis processing error: {e}")
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Synthesis processing failed: {str(e)}"
+        })
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {
-        "status": "healthy", 
+        "status": "healthy",
         "timestamp": time.time(),
         "architecture": "phase3_functional",
         "components": {
             "event_bus": "running" if event_bus else "stopped",
             "websocket_manager": "initialized" if websocket_manager else "not_initialized",
-            "pipeline": "ready" if pipeline else "not_ready"
+            "stt_pipeline": "ready" if pipeline else "not_ready",
+            "tts_pipeline": "ready" if tts_pipeline else "not_ready",
+            "tts_provider": "initialized" if tts_provider else "not_initialized"
         }
     }
 

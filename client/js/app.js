@@ -4,15 +4,17 @@ class WhisperApp {
     constructor() {
         // Core components
         this.audioClient = null;
+        this.ttsClient = null;
         this.chatInterface = null;
-        
+
         // DOM elements
         this.elements = {};
-        
+
         // State
         this.isRecording = false;
         this.isConnected = false;
-        
+        this.isSynthesizing = false;
+
         // Initialize
         this.init();
     }
@@ -87,19 +89,37 @@ class WhisperApp {
             successToast: document.getElementById('successToast'),
             closeError: document.getElementById('closeError'),
             closeSuccess: document.getElementById('closeSuccess'),
+
+            // TTS elements
+            ttsTextInput: document.getElementById('ttsTextInput'),
+            charCount: document.getElementById('charCount'),
+            voiceSelect: document.getElementById('voiceSelect'),
+            speedSlider: document.getElementById('speedSlider'),
+            speedValue: document.getElementById('speedValue'),
+            speakBtn: document.getElementById('speakBtn'),
+            stopSpeakBtn: document.getElementById('stopSpeakBtn'),
+            downloadAudioBtn: document.getElementById('downloadAudioBtn'),
+            ttsStatus: document.getElementById('ttsStatus'),
         };
     }
 
     initializeComponents() {
         // Initialize chat interface
         this.chatInterface = new ChatInterface(this.elements.chatMessages);
-        
-        // Initialize audio client
+
+        // Initialize audio client (STT)
         this.audioClient = new AudioClient();
-        
-        // Setup audio client event listeners
+
+        // Initialize TTS client
+        this.ttsClient = new TTSClient();
+
+        // Setup event listeners
         this.setupAudioClientEvents();
-        
+        this.setupTTSClientEvents();
+
+        // Initialize TTS client
+        this.initializeTTS();
+
         // Load and apply saved settings
         this.loadSettings();
     }
@@ -184,23 +204,26 @@ class WhisperApp {
         this.elements.recordBtn.addEventListener('click', () => {
             this.toggleRecording();
         });
-        
+
         // Upload button
         this.elements.uploadBtn.addEventListener('click', () => {
             this.showModal('uploadModal');
         });
-        
+
         // Clear button
         this.elements.clearBtn.addEventListener('click', () => {
             if (confirm('Clear all messages?')) {
                 this.chatInterface.clearMessages();
             }
         });
-        
+
         // Settings button
         this.elements.settingsBtn.addEventListener('click', () => {
             this.showModal('settingsModal');
         });
+
+        // TTS event listeners
+        this.setupTTSEventListeners();
         
         // File input
         this.elements.fileInput.addEventListener('change', (e) => {
@@ -462,13 +485,174 @@ class WhisperApp {
 
     isTyping(element) {
         const typingElements = ['INPUT', 'TEXTAREA', 'SELECT'];
-        return typingElements.includes(element.tagName) || 
+        return typingElements.includes(element.tagName) ||
                element.contentEditable === 'true';
+    }
+
+    // TTS Methods
+
+    async initializeTTS() {
+        try {
+            await this.ttsClient.initialize();
+            console.log('✅ TTS initialized');
+        } catch (error) {
+            console.error('❌ TTS initialization failed:', error);
+            Utils.showToast('TTS service unavailable', 'error');
+            this.elements.speakBtn.disabled = true;
+        }
+    }
+
+    setupTTSClientEvents() {
+        // Voices loaded
+        this.ttsClient.onVoicesLoaded = (voices) => {
+            this.populateVoiceSelect(voices);
+            this.elements.speakBtn.disabled = false;
+        };
+
+        // Synthesis start
+        this.ttsClient.onSynthesisStart = () => {
+            this.isSynthesizing = true;
+            this.updateTTSUI();
+            this.showTTSStatus('Synthesizing speech...');
+        };
+
+        // Synthesis complete
+        this.ttsClient.onSynthesisComplete = (audioBlob, result) => {
+            this.isSynthesizing = false;
+            this.updateTTSUI();
+            this.hideTTSStatus();
+
+            // Add message to chat
+            const text = this.elements.ttsTextInput.value;
+            this.chatInterface.addTTSMessage(text, {
+                voice: this.elements.voiceSelect.value,
+                processingTime: result.processing_time
+            });
+
+            // Auto-play the audio
+            this.ttsClient.playAudio();
+
+            Utils.showToast('Speech synthesized successfully!', 'success', 2000);
+        };
+
+        // Synthesis error
+        this.ttsClient.onSynthesisError = (error) => {
+            this.isSynthesizing = false;
+            this.updateTTSUI();
+            this.hideTTSStatus();
+            Utils.showToast(`TTS Error: ${error}`, 'error');
+        };
+
+        // Audio playback events
+        this.ttsClient.onAudioPlay = () => {
+            this.elements.stopSpeakBtn.style.display = 'inline-flex';
+            this.elements.downloadAudioBtn.style.display = 'inline-flex';
+        };
+
+        this.ttsClient.onAudioEnd = () => {
+            this.elements.stopSpeakBtn.style.display = 'none';
+        };
+    }
+
+    setupTTSEventListeners() {
+        // Text input character counter
+        this.elements.ttsTextInput.addEventListener('input', () => {
+            const length = this.elements.ttsTextInput.value.length;
+            this.elements.charCount.textContent = length;
+
+            // Enable/disable speak button
+            this.elements.speakBtn.disabled = length === 0 || this.isSynthesizing;
+        });
+
+        // Speed slider
+        this.elements.speedSlider.addEventListener('input', () => {
+            const speed = parseFloat(this.elements.speedSlider.value);
+            this.elements.speedValue.textContent = `${speed.toFixed(1)}x`;
+        });
+
+        // Speak button
+        this.elements.speakBtn.addEventListener('click', () => {
+            this.handleSpeak();
+        });
+
+        // Stop speak button
+        this.elements.stopSpeakBtn.addEventListener('click', () => {
+            this.ttsClient.stopAudio();
+            this.elements.stopSpeakBtn.style.display = 'none';
+        });
+
+        // Download audio button
+        this.elements.downloadAudioBtn.addEventListener('click', () => {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            this.ttsClient.downloadAudio(`speech_${timestamp}.wav`);
+            Utils.showToast('Audio downloaded!', 'success', 2000);
+        });
+    }
+
+    populateVoiceSelect(voices) {
+        this.elements.voiceSelect.innerHTML = '';
+
+        voices.forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice.name;
+            option.textContent = `${voice.language.toUpperCase()} - ${voice.description || voice.name}`;
+            this.elements.voiceSelect.appendChild(option);
+        });
+
+        console.log(`✅ Populated ${voices.length} voices`);
+    }
+
+    async handleSpeak() {
+        const text = this.elements.ttsTextInput.value.trim();
+
+        if (!text) {
+            Utils.showToast('Please enter text to synthesize', 'error');
+            return;
+        }
+
+        const voice = this.elements.voiceSelect.value;
+        const speed = parseFloat(this.elements.speedSlider.value);
+
+        try {
+            // Use WebSocket for faster synthesis if connected
+            if (this.ttsClient.isConnected) {
+                this.ttsClient.synthesizeSpeechWebSocket(text, voice, speed);
+            } else {
+                // Fallback to REST API
+                await this.ttsClient.synthesizeSpeech(text, voice, speed);
+            }
+        } catch (error) {
+            console.error('❌ Speech synthesis failed:', error);
+            Utils.showToast('Speech synthesis failed', 'error');
+        }
+    }
+
+    updateTTSUI() {
+        this.elements.speakBtn.disabled = this.isSynthesizing || !this.elements.ttsTextInput.value.trim();
+
+        if (this.isSynthesizing) {
+            this.elements.speakBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Synthesizing...</span>';
+        } else {
+            this.elements.speakBtn.innerHTML = '<i class="fas fa-play"></i><span>Speak</span>';
+        }
+    }
+
+    showTTSStatus(message) {
+        this.elements.ttsStatus.querySelector('.status-message').textContent = message;
+        this.elements.ttsStatus.style.display = 'flex';
+    }
+
+    hideTTSStatus() {
+        this.elements.ttsStatus.style.display = 'none';
     }
 
     cleanup() {
         if (this.audioClient) {
             this.audioClient.cleanup();
+        }
+
+        if (this.ttsClient) {
+            this.ttsClient.disconnect();
         }
     }
 }
