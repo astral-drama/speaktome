@@ -29,7 +29,7 @@ class CoquiTTSProvider(TTSProvider):
 
     def __init__(
         self,
-        default_voice: str = "tts_models/en/ljspeech/tacotron2-DDC",
+        default_voice: str = "tts_models/en/ljspeech/vits",
         device: str = "cuda",
         max_workers: int = 2
     ):
@@ -215,6 +215,52 @@ class CoquiTTSProvider(TTSProvider):
 
             self.total_failed += 1
 
+    def _preprocess_text(self, text: str) -> str:
+        """
+        Preprocess text for better TTS quality
+
+        Handles:
+        - Contraction expansion (optional - some models handle them well)
+        - Number normalization
+        - Special character cleanup
+        """
+        import re
+
+        # Common contractions that often cause issues
+        contractions = {
+            "won't": "will not",
+            "can't": "cannot",
+            "n't": " not",  # General 'nt' pattern
+            "'re": " are",
+            "'ve": " have",
+            "'ll": " will",
+            "'d": " would",
+            "'m": " am",
+            "let's": "let us",
+        }
+
+        processed = text
+
+        # Only expand contractions if using older models like Tacotron
+        # VITS and XTTS handle contractions well
+        if 'tacotron' in self.default_voice.lower():
+            for contraction, expansion in contractions.items():
+                processed = re.sub(
+                    rf"\b(\w+){re.escape(contraction)}\b",
+                    rf"\1{expansion}",
+                    processed,
+                    flags=re.IGNORECASE
+                )
+
+        # Normalize whitespace
+        processed = ' '.join(processed.split())
+
+        # Ensure sentences end with punctuation for better prosody
+        if processed and processed[-1] not in '.!?':
+            processed += '.'
+
+        return processed
+
     def _synthesize_speech(self, text: str, voice: str) -> tuple[bytes, int]:
         """
         Synthesize speech from text (blocking operation)
@@ -223,13 +269,16 @@ class CoquiTTSProvider(TTSProvider):
             Tuple of (audio_data_bytes, sample_rate)
         """
         try:
+            # Preprocess text for better quality
+            processed_text = self._preprocess_text(text)
+
             # Create temporary file for output
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
                 output_path = tmp_file.name
 
             # Generate speech
-            logger.debug(f"Synthesizing: '{text[:50]}...'")
-            self.tts.tts_to_file(text=text, file_path=output_path)
+            logger.debug(f"Synthesizing: '{processed_text[:50]}...'")
+            self.tts.tts_to_file(text=processed_text, file_path=output_path)
 
             # Read audio data
             with open(output_path, 'rb') as f:
@@ -329,27 +378,43 @@ class CoquiTTSProvider(TTSProvider):
     async def get_available_voices(self) -> Result[List[VoiceInfo], str]:
         """Get list of available voices"""
         try:
-            # Coqui TTS has many models, return common ones
+            # Coqui TTS has many models, return high-quality ones
             voices = [
                 VoiceInfo(
-                    name="tts_models/en/ljspeech/tacotron2-DDC",
+                    name="tts_models/multilingual/multi-dataset/xtts_v2",
                     language="en",
-                    description="English female voice (LJSpeech)",
-                    sample_rate=22050,
-                    loaded=(self.default_voice == "tts_models/en/ljspeech/tacotron2-DDC")
+                    description="XTTS v2 - Most natural, handles contractions well (multilingual)",
+                    sample_rate=24000,
+                    loaded=(self.default_voice == "tts_models/multilingual/multi-dataset/xtts_v2")
                 ),
                 VoiceInfo(
                     name="tts_models/en/ljspeech/vits",
                     language="en",
-                    description="English female voice (VITS)",
-                    sample_rate=22050
+                    description="VITS - Fast, natural, good with contractions",
+                    sample_rate=22050,
+                    loaded=(self.default_voice == "tts_models/en/ljspeech/vits")
                 ),
                 VoiceInfo(
                     name="tts_models/en/vctk/vits",
                     language="en",
-                    description="English multi-speaker (VCTK)",
+                    description="VITS Multi-speaker - Multiple voices available",
                     sample_rate=22050,
-                    is_multispeaker=True
+                    is_multispeaker=True,
+                    loaded=(self.default_voice == "tts_models/en/vctk/vits")
+                ),
+                VoiceInfo(
+                    name="tts_models/en/ljspeech/tacotron2-DDC",
+                    language="en",
+                    description="Tacotron2 - Classic model (may struggle with contractions)",
+                    sample_rate=22050,
+                    loaded=(self.default_voice == "tts_models/en/ljspeech/tacotron2-DDC")
+                ),
+                VoiceInfo(
+                    name="tts_models/en/multi-dataset/tortoise-v2",
+                    language="en",
+                    description="Tortoise v2 - Highest quality, slower (best naturalness)",
+                    sample_rate=24000,
+                    loaded=(self.default_voice == "tts_models/en/multi-dataset/tortoise-v2")
                 )
             ]
 

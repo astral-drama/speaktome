@@ -174,8 +174,13 @@ async def startup_event():
     logger.info("✅ STT audio processing pipeline initialized")
 
     # Initialize TTS pipeline with Coqui TTS
+    # Using VITS model for better naturalness and contraction handling
     from server.providers.coqui_tts_provider import CoquiTTSProvider
-    tts_provider = CoquiTTSProvider(device="cuda", max_workers=2)
+    tts_provider = CoquiTTSProvider(
+        default_voice="tts_models/en/ljspeech/vits",
+        device="cuda",
+        max_workers=2
+    )
     tts_init_result = await tts_provider.initialize()
     if tts_init_result.is_success():
         tts_pipeline = create_default_tts_pipeline(tts_provider)
