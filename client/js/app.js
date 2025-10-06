@@ -200,8 +200,19 @@ class WhisperApp {
     }
 
     setupEventListeners() {
-        // Record button
-        this.elements.recordBtn.addEventListener('click', () => {
+        // Record button - prevent rapid double-clicks
+        this.elements.recordBtn.addEventListener('click', (e) => {
+            console.log('🔴 RECORD BUTTON CLICKED', { isRecording: this.isRecording, disabled: this.elements.recordBtn.disabled });
+
+            // Prevent event bubbling
+            e.stopPropagation();
+
+            // Disable button temporarily to prevent double-clicks
+            if (this.elements.recordBtn.disabled) {
+                console.log('❌ Button is disabled, ignoring click');
+                return;
+            }
+
             this.toggleRecording();
         });
 
@@ -260,12 +271,12 @@ class WhisperApp {
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
-            // Space bar to toggle recording (when not typing)
-            if (e.code === 'Space' && !this.isTyping(e.target)) {
+            // Space bar to toggle recording (when not typing or on buttons)
+            if (e.code === 'Space' && !this.isTyping(e.target) && e.target.tagName !== 'BUTTON') {
                 e.preventDefault();
                 this.toggleRecording();
             }
-            
+
             // Escape to close modals
             if (e.key === 'Escape') {
                 this.hideAllModals();
@@ -324,19 +335,31 @@ class WhisperApp {
     }
 
     async toggleRecording() {
+        console.log('⚡ toggleRecording() called', { isRecording: this.isRecording, isConnected: this.isConnected });
+
         if (!this.isConnected) {
             Utils.showToast('Not connected to server', 'error');
             return;
         }
-        
+
+        // Prevent rapid toggling (debounce)
+        const now = Date.now();
+        if (this._lastToggleTime && (now - this._lastToggleTime) < 500) {
+            console.log('⏸️ Ignoring rapid toggle - too soon after last toggle', { timeSince: now - this._lastToggleTime });
+            return;
+        }
+        this._lastToggleTime = now;
+
         if (this.isRecording) {
             // Stop recording
+            console.log('🛑 Stopping recording...');
             const stopped = this.audioClient.stopRecording();
             if (stopped) {
                 this.updateRecordingStatus('Processing...');
             }
         } else {
             // Start recording
+            console.log('▶️ Starting recording...');
             this.updateRecordingStatus('Starting...');
             const started = await this.audioClient.startRecording();
             if (started) {
