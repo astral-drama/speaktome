@@ -153,10 +153,10 @@ class MainWindow:
         """Create the main GUI window"""
         self.root = tk.Tk()
         self.root.title("SpeakToMe Voice Client")
-        # Adjusted height to ensure buttons aren't truncated: 3 lines * 15px + buttons ~35px + padding ~20px = ~105px
-        self.root.geometry("600x105")
+        # Set larger default size to ensure all controls are visible
+        self.root.geometry("800x200")
         self.root.resizable(True, True)  # Allow both horizontal and vertical resize
-        self.root.minsize(550, 105)  # Set minimum size ensuring buttons are visible
+        self.root.minsize(700, 150)  # Set minimum size ensuring buttons are visible
         
         # Keep window on top (can be toggled)
         self.always_on_top = True
