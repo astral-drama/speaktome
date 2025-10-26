@@ -229,8 +229,8 @@ class AudioFormatStage(PipelineStage):
 
 class TranscriptionRequestStage(PipelineStage):
     """Pipeline stage for preparing transcription requests"""
-    
-    def __init__(self, model: str = "base", language: str = "auto"):
+
+    def __init__(self, model: str = "base", language: Optional[str] = None):
         self.model = model
         self.language = language
     
@@ -322,7 +322,7 @@ def create_quality_pipeline() -> AudioPipeline:
     stages = [
         AudioValidationStage(min_duration=0.5, min_size=2000),
         AudioFormatStage(target_format="wav", target_sample_rate=22050),
-        TranscriptionRequestStage(model="small", language="auto")
+        TranscriptionRequestStage(model="small", language=None)
     ]
     
     return AudioPipeline(stages)

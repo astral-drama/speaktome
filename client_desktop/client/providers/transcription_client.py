@@ -96,7 +96,7 @@ class TranscriptionClient:
         
         return await from_async_callable(_disconnect)
     
-    async def transcribe_audio(self, audio_data: AudioData, model: str = "base", language: str = "auto") -> Result[str, Exception]:
+    async def transcribe_audio(self, audio_data: AudioData, model: str = "base", language: Optional[str] = None) -> Result[str, Exception]:
         """Send audio for transcription and return the result"""
         # Ensure we have a valid connection
         connection_result = await self._ensure_connection()

@@ -1,6 +1,6 @@
 {
     "server_url": "ws://192.168.0.156:8000/ws/transcribe",
-    "model": "base",
+    "model": "medium",
     "hotkey": "ctrl+alt+s",
     "audio_sample_rate": 16000,
     "audio_channels": 1,

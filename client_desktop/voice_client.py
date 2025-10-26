@@ -254,7 +254,7 @@ class SpeakToMeClient:
                 "data": audio_b64,
                 "format": "wav",
                 "model": model,
-                "language": "auto"
+                "language": None
             }
             
             await self.websocket.send(json.dumps(request))

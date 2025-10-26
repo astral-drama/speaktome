@@ -168,7 +168,7 @@ async def startup_event():
 
     # Initialize STT pipeline with real Whisper transcription
     from server.providers.whisper_provider import WhisperTranscriptionProvider
-    provider = WhisperTranscriptionProvider(default_model="base", max_workers=2)
+    provider = WhisperTranscriptionProvider(default_model="medium", max_workers=2)
     await provider.initialize()
     pipeline = create_default_pipeline(provider)
     logger.info("✅ STT audio processing pipeline initialized")

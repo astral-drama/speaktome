@@ -100,7 +100,7 @@ class TranscriptionRequestedEvent(BaseEvent):
     """Event fired when transcription is requested"""
     audio_size: int = 0
     model: str = "base"
-    language: str = "auto"
+    language: Optional[str] = None
     
     @property
     def event_type(self) -> str:
@@ -111,7 +111,7 @@ class TranscriptionRequestedEvent(BaseEvent):
 class TranscriptionReceivedEvent(BaseEvent):
     """Event fired when transcription is received"""
     text: str = ""
-    language: str = "auto"
+    language: Optional[str] = None
     processing_time: float = 0.0
     confidence: Optional[float] = None
     
