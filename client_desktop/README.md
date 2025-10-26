@@ -15,19 +15,29 @@ A cross-platform desktop client that captures voice input via global hotkeys and
 
 ### 1. Install Dependencies
 
+**Create and activate virtual environment** (recommended):
 ```bash
-# Install Python dependencies
-pip install -r requirements.txt
+# From the main speaktome directory
+python3 -m venv .venv
+source .venv/bin/activate
 
-# macOS: May need additional audio setup
+# Install Python dependencies
+pip install --upgrade pip
+pip install -r client_desktop/requirements.txt
+```
+
+**System audio libraries** (platform-specific):
+```bash
+# macOS: Install audio dependencies
 brew install portaudio
 
-# Linux: Install system audio libraries
+# Linux: Install system audio libraries  
 sudo apt-get install portaudio19-dev python3-pyaudio
-# or
+sudo apt-get install xclip  # For clipboard support
+# OR on CentOS/RHEL/Fedora:
 sudo yum install portaudio-devel
 
-# Windows: Usually works out of the box
+# Windows: Usually works out of the box with pip
 ```
 
 ### 2. Start SpeakToMe Server
@@ -42,26 +52,35 @@ python start_server.py
 ### 3. Run the Voice Client
 
 ```bash
+# Activate virtual environment first
+source .venv/bin/activate
+
+# Navigate to desktop client directory
+cd client_desktop
+
 # Basic usage
-python voice_client.py
+PYTHONPATH=/home/seth/Software/dev/speaktome python client/voice_client_app.py
+
+# Or use the GUI version
+PYTHONPATH=/home/seth/Software/dev/speaktome python speaktome_client.py
 
 # With custom server
-python voice_client.py --server ws://192.168.1.100:8000/ws/transcribe
+PYTHONPATH=/home/seth/Software/dev/speaktome python client/voice_client_app.py --server ws://192.168.1.100:8000/ws/transcribe
 
 # With custom hotkey
-python voice_client.py --hotkey "ctrl+alt+v"
+PYTHONPATH=/home/seth/Software/dev/speaktome python client/voice_client_app.py --hotkey "ctrl+alt+v"
 
-# With config file
-python voice_client.py --config my_config.json
+# With config file  
+PYTHONPATH=/home/seth/Software/dev/speaktome python client/voice_client_app.py --config my_config.json
 ```
 
 ## Usage
 
-1. **Start the client**: Run `python voice_client.py`
+1. **Start the client**: Run `PYTHONPATH=/home/seth/Software/dev/speaktome python speaktome_client.py` (GUI) or `python client/voice_client_app.py` (CLI)
 2. **Press hotkey**: Use `Ctrl+Shift+W` (or your configured hotkey) anywhere
 3. **Record audio**: Speak while the recording indicator is active
 4. **Stop recording**: Press the hotkey again or wait for auto-stop
-5. **Get text**: Transcribed text appears in your active window
+5. **Get text**: Transcribed text appears in your active window via clipboard or primary selection
 
 ## Configuration
 
@@ -300,17 +319,24 @@ sudo systemctl start speaktome-client
 
 The client uses **Phase 3 functional architecture** matching the server design:
 
-- **Result Monads**: Composable error handling without exceptions
+- **Result Monads**: Composable error handling without exceptions following mathematical laws (Left Identity, Right Identity, Associativity)
 - **Event-Driven**: Decoupled communication via event bus
 - **Dependency Injection**: Container-based service management
 - **Composable Pipelines**: Functional audio processing stages
 - **Immutable Data**: AudioData and ProcessingContext transformations
+- **Pure Functions**: UI builders and data transformations extracted into composable, testable functions
+- **Category Theory Patterns**: Mathematical coherence with associativity, identity, and composition laws
+- **Functional Composition**: Large methods decomposed into chains of pure functions using `flat_map`
 
 ### Testing
 
 Comprehensive test suite following server patterns:
 
 ```bash
+# Ensure virtual environment is activated and PYTHONPATH is set
+source .venv/bin/activate
+export PYTHONPATH=/home/seth/Software/dev/speaktome
+
 # Run all tests
 python tests/run_tests.py
 
@@ -319,14 +345,16 @@ python tests/run_tests.py --type unit
 python tests/run_tests.py --type integration
 python tests/run_tests.py --type e2e
 
+# Run property-based tests (mathematical properties verification)
+pytest tests/property_based/ -v
+
 # Run with coverage
 python tests/run_tests.py --coverage
 
 # Run linting and type checking
 python tests/run_tests.py --quality
-
-# Run parallel tests
-python tests/run_tests.py --parallel 4
+ruff check client/
+mypy client/
 
 # Using pytest directly
 pytest tests/unit/                    # Unit tests
@@ -338,8 +366,9 @@ pytest --cov=client --cov=shared      # With coverage
 ### Test Categories
 
 - **Unit Tests**: Functional utilities, Result monads, pipeline stages
-- **Integration Tests**: Provider interactions, event flows, component communication
+- **Integration Tests**: Provider interactions, event flows, component communication  
 - **End-to-End Tests**: Complete workflows from hotkey to text injection
+- **Property-Based Tests**: Mathematical laws and invariants (monad laws, function composition, UI determinism)
 
 ### Building Executable
 
@@ -367,9 +396,18 @@ This project is part of the SpeakToMe voice-to-text system. See the main project
 
 ## Changelog
 
+### v1.1.0
+- **Functional Architecture**: Complete refactoring using Category Theory principles
+- **Improved Text Injection**: Added X11 primary selection support (middle mouse paste)
+- **Enhanced UI**: Functional composition patterns, reduced verbose dialogs
+- **Property-Based Testing**: Mathematical verification of functional composition
+- **Better Error Handling**: Result monad patterns throughout codebase
+- **Threading Fixes**: Proper async event loop handling for global hotkeys
+- **Code Quality**: Removed debugging cruft, extracted pure functions
+
 ### v1.0.0
 - Initial release with cross-platform support
-- Global hotkey integration
+- Global hotkey integration  
 - WebSocket client for SpeakToMe server
 - Text injection into active windows
 - JSON configuration support

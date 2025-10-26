@@ -143,6 +143,81 @@ class TranscriptionFailedEvent(DomainEvent):
             }
         )
 
+# TTS-specific domain events
+@dataclass(frozen=True)
+class TextSubmittedEvent(DomainEvent):
+    """Event fired when text is submitted for synthesis"""
+    event_type: str = "tts.text_submitted"
+
+    @classmethod
+    def create(cls, request_id: str, text: str, voice: str, client_id: str = None) -> 'TextSubmittedEvent':
+        return cls(
+            source="tts_service",
+            correlation_id=request_id,
+            data={
+                "request_id": request_id,
+                "text": text[:100],  # Truncate for logging
+                "text_length": len(text),
+                "voice": voice,
+                "client_id": client_id
+            }
+        )
+
+@dataclass(frozen=True)
+class SynthesisStartedEvent(DomainEvent):
+    """Event fired when TTS synthesis begins"""
+    event_type: str = "tts.synthesis_started"
+
+    @classmethod
+    def create(cls, request_id: str, voice: str, text_length: int, client_id: str = None) -> 'SynthesisStartedEvent':
+        return cls(
+            source="tts_service",
+            correlation_id=request_id,
+            data={
+                "request_id": request_id,
+                "voice": voice,
+                "text_length": text_length,
+                "client_id": client_id
+            }
+        )
+
+@dataclass(frozen=True)
+class SynthesisCompletedEvent(DomainEvent):
+    """Event fired when TTS synthesis completes"""
+    event_type: str = "tts.synthesis_completed"
+
+    @classmethod
+    def create(cls, request_id: str, audio_size: int, duration: float, processing_time: float, client_id: str = None) -> 'SynthesisCompletedEvent':
+        return cls(
+            source="tts_service",
+            correlation_id=request_id,
+            data={
+                "request_id": request_id,
+                "audio_size": audio_size,
+                "duration": duration,
+                "processing_time": processing_time,
+                "client_id": client_id
+            }
+        )
+
+@dataclass(frozen=True)
+class SynthesisFailedEvent(DomainEvent):
+    """Event fired when TTS synthesis fails"""
+    event_type: str = "tts.synthesis_failed"
+    priority: EventPriority = EventPriority.HIGH
+
+    @classmethod
+    def create(cls, request_id: str, error: str, client_id: str = None) -> 'SynthesisFailedEvent':
+        return cls(
+            source="tts_service",
+            correlation_id=request_id,
+            data={
+                "request_id": request_id,
+                "error": error,
+                "client_id": client_id
+            }
+        )
+
 @dataclass(frozen=True)
 class WebSocketConnectedEvent(DomainEvent):
     """Event fired when WebSocket client connects"""

@@ -291,27 +291,38 @@ class MainWindow:
     
     def _toggle_recording(self) -> None:
         """Toggle recording state using functional composition"""
+        import time
+
+        # Debounce: Ignore rapid successive clicks (within 500ms)
+        current_time = time.time()
+        if hasattr(self, '_last_toggle_time'):
+            time_since_last = (current_time - self._last_toggle_time) * 1000  # ms
+            if time_since_last < 500:
+                logger.debug(f"Ignoring rapid button click - {time_since_last:.0f}ms since last click")
+                return
+
+        self._last_toggle_time = current_time
         logger.info(f"GUI button clicked - current recording_state: {self.recording_state}")
-        
+
         # Determine recording action based on current state
         hotkey = self.config.get('hotkey', 'ctrl+shift+w')
-        
+
         if self.recording_state == "ready":
             is_recording_start = True
             action = "start"
         elif self.recording_state == "recording":
-            is_recording_start = False  
+            is_recording_start = False
             action = "stop"
         else:
             logger.warning(f"Cannot toggle recording from state: {self.recording_state}")
             return
-        
+
         # Use functional composition to create and publish event
         result = (
             MainWindow._create_hotkey_event(hotkey, is_recording_start, "gui_button")
             .flat_map(lambda event: self._publish_event_async(event))
         )
-        
+
         if result.is_failure():
             logger.error(f"Failed to {action} recording: {result.error}")
     
@@ -324,7 +335,8 @@ class MainWindow:
             bottom_control_frame,
             text="🎙️ Start Recording",
             command=self._toggle_recording,
-            width=20
+            width=20,
+            takefocus=False  # Prevent button from taking focus and being triggered by keyboard
         )
 
         copy_selected_button = ttk.Button(

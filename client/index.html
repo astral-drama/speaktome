@@ -46,30 +46,100 @@
                 </div>
             </div>
 
-            <!-- Recording Controls -->
+            <!-- Recording Controls (STT) -->
             <div class="recording-controls">
+                <div class="section-header">
+                    <h3><i class="fas fa-microphone"></i> Speech to Text</h3>
+                </div>
                 <div class="recording-status" id="recordingStatus">
                     <div class="status-text">Ready to record</div>
                     <div class="audio-level">
                         <div class="audio-level-bar" id="audioLevel"></div>
                     </div>
                 </div>
-                
+
                 <div class="control-buttons">
                     <button class="btn btn-primary record-btn" id="recordBtn" disabled>
                         <i class="fas fa-microphone"></i>
                         <span>Start Recording</span>
                     </button>
-                    
+
                     <button class="btn btn-secondary" id="uploadBtn">
                         <i class="fas fa-upload"></i>
                         <span>Upload File</span>
                     </button>
-                    
+
                     <button class="btn btn-secondary" id="clearBtn">
                         <i class="fas fa-trash"></i>
                         <span>Clear Chat</span>
                     </button>
+                </div>
+            </div>
+
+            <!-- TTS Controls -->
+            <div class="tts-controls">
+                <div class="section-header">
+                    <h3><i class="fas fa-volume-up"></i> Text to Speech</h3>
+                </div>
+
+                <div class="tts-input-area">
+                    <textarea
+                        id="ttsTextInput"
+                        class="tts-textarea"
+                        placeholder="Enter text to convert to speech..."
+                        rows="4"
+                        maxlength="5000"
+                    ></textarea>
+                    <div class="char-counter">
+                        <span id="charCount">0</span> / 5000 characters
+                    </div>
+                </div>
+
+                <div class="tts-settings">
+                    <div class="setting-inline">
+                        <label for="voiceSelect"><i class="fas fa-user"></i> Voice</label>
+                        <select id="voiceSelect" class="form-control">
+                            <option value="default">Loading voices...</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-inline">
+                        <label for="speedSlider"><i class="fas fa-tachometer-alt"></i> Speed</label>
+                        <div class="slider-container">
+                            <input
+                                type="range"
+                                id="speedSlider"
+                                class="speed-slider"
+                                min="0.5"
+                                max="2.0"
+                                step="0.1"
+                                value="1.0"
+                            >
+                            <span id="speedValue">1.0x</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tts-buttons">
+                    <button class="btn btn-primary" id="speakBtn" disabled>
+                        <i class="fas fa-play"></i>
+                        <span>Speak</span>
+                    </button>
+
+                    <button class="btn btn-secondary" id="stopSpeakBtn" style="display: none;">
+                        <i class="fas fa-stop"></i>
+                        <span>Stop</span>
+                    </button>
+
+                    <button class="btn btn-secondary" id="downloadAudioBtn" style="display: none;">
+                        <i class="fas fa-download"></i>
+                        <span>Download Audio</span>
+                    </button>
+                </div>
+
+                <div class="tts-status" id="ttsStatus" style="display: none;">
+                    <div class="status-indicator"></div>
+                    <span class="status-message">Processing...</span>
                 </div>
             </div>
         </main>
@@ -207,6 +277,7 @@
     <!-- Scripts -->
     <script src="js/utils.js"></script>
     <script src="js/audio-client.js"></script>
+    <script src="js/tts-client.js"></script>
     <script src="js/chat-interface.js"></script>
     <script src="js/app.js"></script>
 </body>
