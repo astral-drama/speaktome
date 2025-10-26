@@ -63,6 +63,7 @@ class TranscriptionResponse(BaseModel):
     status: str
     text: Optional[str] = None
     language: Optional[str] = None
+    model: Optional[str] = None
     processing_time: Optional[float] = None
     error: Optional[str] = None
 
@@ -457,6 +458,7 @@ async def get_transcription_result(request_id: str):
         status=transcription['status'],
         text=transcription.get('text'),
         language=transcription.get('language', 'en'),
+        model=transcription.get('model'),
         processing_time=transcription.get('processing_time'),
         error=transcription.get('error')
     )
@@ -734,6 +736,7 @@ async def _process_websocket_audio(websocket: WebSocket, data: dict, client_id: 
                 "status": "completed",
                 "text": transcription_text,
                 "language": context.language or "en",
+                "model": context.model,
                 "processing_time": processing_time,
                 "timestamp": time.time()
             })
