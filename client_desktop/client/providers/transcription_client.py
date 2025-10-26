@@ -199,8 +199,9 @@ class TranscriptionClient:
                         text = response.get("text", "").strip()
                         processing_time = response.get("processing_time", 0.0)
                         detected_language = response.get("language", language)
+                        model_used = response.get("model", "unknown")
                         confidence = response.get("confidence")
-                        
+
                         # Publish transcription received event
                         await self.event_bus.publish(TranscriptionReceivedEvent(
                             text=text,
@@ -209,8 +210,8 @@ class TranscriptionClient:
                         confidence=confidence,
                         source="transcription_client"
                         ))
-                        
-                        logger.info(f"Transcription received: '{text[:50]}...' in {processing_time:.3f}s")
+
+                        logger.info(f"Transcription received: '{text[:50]}...' in {processing_time:.3f}s [model: {model_used}]")
                         return text
                         
                     elif response.get("type") == "error":
