@@ -286,15 +286,16 @@ class MainWindow:
         self.recording_state = state
 
         if state == "recording":
-            self.record_button.config(text="⏹️", style="Accent.TButton")  # Stop icon
+            # Stop icon - black square
+            self.record_button.config(text="⏹", fg='black', state=tk.NORMAL, relief=tk.SUNKEN)
             logger.debug("Button updated to Stop icon")
         elif state == "processing":
-            self.record_button.config(text="⏳", state=tk.DISABLED)  # Hourglass
+            # Hourglass - disabled state
+            self.record_button.config(text="⏳", fg='gray', state=tk.DISABLED, relief=tk.FLAT)
             logger.debug("Button updated to Processing icon")
         else:
-            self.record_button.config(text="🔴", state=tk.NORMAL)  # Red circle
-            # Reset button style
-            self.record_button.config(style="TButton")
+            # Red circle - ready to record
+            self.record_button.config(text="●", fg='red', state=tk.NORMAL, relief=tk.RAISED)
             logger.debug("Button updated to Record icon")
     
     def _add_recorded_entry(self, recording_id: str) -> None:
@@ -434,12 +435,18 @@ class MainWindow:
         """Pure function to create bottom control panel with main buttons and menu"""
         bottom_control_frame = ttk.Frame(transcription_frame)
 
-        # Record button with red circle icon
-        record_button = ttk.Button(
+        # Record button with red circle - using tk.Button for color control
+        record_button = tk.Button(
             bottom_control_frame,
-            text="🔴",
+            text="●",
             command=self._toggle_recording,
             width=3,
+            font=('Arial', 16, 'bold'),
+            fg='red',
+            bg='#f0f0f0',
+            activeforeground='darkred',
+            activebackground='#e0e0e0',
+            relief=tk.RAISED,
             takefocus=False  # Prevent button from taking focus and being triggered by keyboard
         )
 
