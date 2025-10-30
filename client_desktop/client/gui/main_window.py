@@ -229,15 +229,19 @@ class MainWindow:
     def _update_connection_status(self, status: str) -> None:
         """Update connection status display"""
         self.connection_status = status
-        
+
         if status == "connected":
             self.connection_indicator.config(foreground="green")
             self.status_label.config(text="Connected")
             self.record_button.config(state=tk.NORMAL)
         elif status == "connecting":
-            self.connection_indicator.config(foreground="orange") 
+            self.connection_indicator.config(foreground="orange")
             self.status_label.config(text="Connecting...")
             self.record_button.config(state=tk.DISABLED)
+        elif status == "error":
+            self.connection_indicator.config(foreground="red")
+            self.status_label.config(text="Error - Click to retry")
+            self.record_button.config(state=tk.NORMAL)
         else:
             self.connection_indicator.config(foreground="red")
             self.status_label.config(text="Disconnected")
@@ -285,9 +289,26 @@ class MainWindow:
         self._update_recording_state("ready")
     
     def _show_error(self, error_message: str) -> None:
-        """Show error message"""
-        messagebox.showerror("Voice Client Error", error_message)
+        """Show error message in status display"""
+        logger.error(f"Error occurred: {error_message}")
+
+        # Update status to show error (non-blocking)
+        self._update_connection_status("error")
+
+        # Reset recording state so button is clickable again
         self._update_recording_state("ready")
+
+        # Schedule automatic reconnection attempt after 3 seconds
+        if self.root and self.is_running:
+            self.root.after(3000, self._attempt_reconnection)
+
+    def _attempt_reconnection(self) -> None:
+        """Reset connection status after error to allow retry"""
+        if self.connection_status == "error":
+            logger.info("Resetting from error state - ready for retry")
+            # Reset to connected state if we think we're still connected
+            # The transcription client will auto-reconnect on next request if needed
+            self._update_connection_status("connected")
     
     def _toggle_recording(self) -> None:
         """Toggle recording state using functional composition"""
