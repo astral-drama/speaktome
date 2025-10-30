@@ -15,13 +15,15 @@ from typing import Optional, Callable, Dict, Any
 from threading import Thread
 import queue
 import time
+import uuid
 
 from shared.functional import Result, Success, Failure
 from shared.events import (
-    EventBus, ConnectionStatusEvent, TranscriptionReceivedEvent, 
-    RecordingStartedEvent, RecordingStoppedEvent, ErrorEvent
+    EventBus, ConnectionStatusEvent, TranscriptionReceivedEvent,
+    RecordingStartedEvent, RecordingStoppedEvent, ErrorEvent, AudioCapturedEvent
 )
 from .gui_events import TranscriptionCopiedEvent, SettingsChangedEvent
+from client.storage import get_recording_storage, cleanup_recording_storage
 
 logger = logging.getLogger(__name__)
 
@@ -45,24 +47,29 @@ class MainWindow:
         self.settings_manager = settings_manager
         self.root: Optional[tk.Tk] = None
         self.is_running = False
-        
+
         # GUI update queue for thread safety
         self.gui_queue = queue.Queue()
-        
+
         # State tracking
         self.connection_status = "disconnected"
         self.recording_state = "ready"  # ready, recording, processing
         self.last_transcription = ""
-        self.transcription_history = []
-        
+        self.transcription_history = []  # Now includes: text, timestamp, datetime, recording_id, status
+        self.current_recording_id: Optional[str] = None  # Track current recording
+
+        # Recording storage
+        self.recording_storage = get_recording_storage()
+
         # GUI components
         self.status_label: Optional[tk.Label] = None
         self.connection_indicator: Optional[tk.Label] = None
         self.record_button: Optional[tk.Button] = None
+        self.transcribe_button: Optional[tk.Button] = None
         self.transcription_text: Optional[tk.Text] = None
         self.copy_button: Optional[tk.Button] = None
         self._active_menu: Optional[tk.Menu] = None
-        
+
         logger.info("Main GUI window initialized")
     
     def initialize(self) -> Result[None, Exception]:
@@ -82,8 +89,9 @@ class MainWindow:
         self.event_bus.subscribe("transcription.received", self._handle_transcription_received)
         self.event_bus.subscribe("recording.started", self._handle_recording_started)
         self.event_bus.subscribe("recording.stopped", self._handle_recording_stopped)
+        self.event_bus.subscribe("audio.captured", self._handle_audio_captured)
         self.event_bus.subscribe("error", self._handle_error)
-        
+
         logger.info("GUI event subscriptions configured")
     
     def _handle_connection_status(self, event: ConnectionStatusEvent) -> Result[None, Exception]:
@@ -99,12 +107,35 @@ class MainWindow:
     def _handle_recording_started(self, event: RecordingStartedEvent) -> Result[None, Exception]:
         """Handle recording started"""
         logger.debug(f"GUI received RecordingStartedEvent: {event}")
+        # Generate new recording ID for this recording
+        self.current_recording_id = str(uuid.uuid4())
+        logger.info(f"Started recording with ID: {self.current_recording_id}")
         self._queue_gui_update(lambda: self._update_recording_state("recording"))
         return Success(None)
-    
+
+    def _handle_audio_captured(self, event: AudioCapturedEvent) -> Result[None, Exception]:
+        """Handle audio captured - save recording to disk"""
+        logger.debug(f"GUI received AudioCapturedEvent")
+        if self.current_recording_id:
+            # Save recording to disk
+            save_result = self.recording_storage.save_recording(
+                recording_id=self.current_recording_id,
+                audio_data=event.audio_data,
+                duration_seconds=event.duration_seconds,
+                audio_format=event.format
+            )
+            if save_result.is_success():
+                logger.info(f"Saved recording {self.current_recording_id} to disk")
+            else:
+                logger.error(f"Failed to save recording: {save_result.error}")
+        return Success(None)
+
     def _handle_recording_stopped(self, event: RecordingStoppedEvent) -> Result[None, Exception]:
-        """Handle recording stopped"""  
+        """Handle recording stopped - add 'Recorded (not transcribed)' entry"""
         logger.debug(f"GUI received RecordingStoppedEvent: {event}")
+        # Add entry with recording ID and "not transcribed" status
+        if self.current_recording_id:
+            self._queue_gui_update(lambda: self._add_recorded_entry(self.current_recording_id))
         self._queue_gui_update(lambda: self._update_recording_state("processing"))
         return Success(None)
     
@@ -185,11 +216,12 @@ class MainWindow:
 
         self.bottom_control_frame = bottom_control_widgets['bottom_control_frame']
         self.record_button = bottom_control_widgets['record_button']
+        self.transcribe_button = bottom_control_widgets['transcribe_button']
         self.copy_selected_button = bottom_control_widgets['copy_selected_button']
         self.menu_button = bottom_control_widgets['menu_button']
         self.connection_indicator = bottom_control_widgets['connection_indicator']
         self.status_label = bottom_control_widgets['status_label']
-    
+
     def _setup_layout(self) -> None:
         """Setup widget layout"""
         # Transcription layout
@@ -203,6 +235,7 @@ class MainWindow:
         # Bottom control panel with main buttons and menu
         self.bottom_control_frame.pack(fill=tk.X, pady=1)
         self.record_button.pack(side=tk.LEFT, padx=(0, 3))
+        self.transcribe_button.pack(side=tk.LEFT, padx=(0, 3))
         self.copy_selected_button.pack(side=tk.LEFT, padx=(0, 3))
         self.menu_button.pack(side=tk.LEFT, padx=3)
         self.status_label.pack(side=tk.RIGHT)
@@ -251,41 +284,90 @@ class MainWindow:
         """Update recording state display"""
         logger.debug(f"Updating recording state: {self.recording_state} -> {state}")
         self.recording_state = state
-        
+
         if state == "recording":
-            self.record_button.config(text="🛑 Stop Recording", style="Accent.TButton")
-            logger.debug("Button updated to 'Stop Recording'")
+            self.record_button.config(text="⏹️", style="Accent.TButton")  # Stop icon
+            logger.debug("Button updated to Stop icon")
         elif state == "processing":
-            self.record_button.config(text="⏳ Processing...", state=tk.DISABLED)
-            logger.debug("Button updated to 'Processing...'")
+            self.record_button.config(text="⏳", state=tk.DISABLED)  # Hourglass
+            logger.debug("Button updated to Processing icon")
         else:
-            self.record_button.config(text="🎙️ Start Recording", state=tk.NORMAL)
+            self.record_button.config(text="🔴", state=tk.NORMAL)  # Red circle
             # Reset button style
             self.record_button.config(style="TButton")
-            logger.debug("Button updated to 'Start Recording'")
+            logger.debug("Button updated to Record icon")
     
-    def _update_transcription(self, text: str) -> None:
-        """Update transcription display"""
-        self.last_transcription = text
+    def _add_recorded_entry(self, recording_id: str) -> None:
+        """Add 'Recorded (not transcribed)' entry to history"""
         transcription_entry = {
-            'text': text,
+            'text': None,  # No transcription yet
             'timestamp': time.time(),
-            'datetime': time.strftime('%H:%M:%S', time.localtime())
+            'datetime': time.strftime('%H:%M:%S', time.localtime()),
+            'recording_id': recording_id,
+            'status': 'recorded'  # recorded, transcribed
         }
         self.transcription_history.append(transcription_entry)
-        
-        # Add to history listbox (newest at top) - show time prefix but copy pure text
-        display_text = f"[{transcription_entry['datetime']}] {text[:80]}{'...' if len(text) > 80 else ''}"
+
+        # Add to history listbox (newest at top)
+        display_text = f"[{transcription_entry['datetime']}] Recorded (not transcribed)"
         self.history_listbox.insert(0, display_text)
-        
-        # Enable copy button
+
+        # Enable transcribe button
+        if hasattr(self, 'transcribe_button'):
+            self.transcribe_button.config(state=tk.NORMAL)
+
+        logger.info(f"Added recorded entry for recording {recording_id}")
+
+    def _update_transcription(self, text: str) -> None:
+        """Update transcription display - either add new or update existing entry"""
+        self.last_transcription = text
+
+        # Check if we should update an existing entry (current_recording_id match)
+        updated = False
+        if self.current_recording_id:
+            # Find entry with matching recording_id and update it
+            for i, entry in enumerate(self.transcription_history):
+                if entry.get('recording_id') == self.current_recording_id and entry.get('status') == 'recorded':
+                    # Update the entry
+                    entry['text'] = text
+                    entry['status'] = 'transcribed'
+
+                    # Update listbox display (history is reversed, newest first)
+                    listbox_index = len(self.transcription_history) - 1 - i
+                    display_text = f"[{entry['datetime']}] {text[:80]}{'...' if len(text) > 80 else ''}"
+                    self.history_listbox.delete(listbox_index)
+                    self.history_listbox.insert(listbox_index, display_text)
+
+                    updated = True
+                    logger.info(f"Updated transcription for recording {self.current_recording_id}")
+                    break
+
+        # If not updating existing, add new entry (for cases where we don't have recording_id)
+        if not updated:
+            transcription_entry = {
+                'text': text,
+                'timestamp': time.time(),
+                'datetime': time.strftime('%H:%M:%S', time.localtime()),
+                'recording_id': self.current_recording_id if self.current_recording_id else None,
+                'status': 'transcribed'
+            }
+            self.transcription_history.append(transcription_entry)
+
+            # Add to history listbox (newest at top)
+            display_text = f"[{transcription_entry['datetime']}] {text[:80]}{'...' if len(text) > 80 else ''}"
+            self.history_listbox.insert(0, display_text)
+
+        # Enable buttons
         self.copy_selected_button.config(state=tk.NORMAL)
-        
+        if hasattr(self, 'transcribe_button'):
+            self.transcribe_button.config(state=tk.NORMAL)
+
         # Add history window entry
         if hasattr(self, 'history_window') and self.history_window:
             self.history_window.add_transcription(text)
-        
-        # Reset recording state
+
+        # Reset recording state and clear current_recording_id
+        self.current_recording_id = None
         self._update_recording_state("ready")
     
     def _show_error(self, error_message: str) -> None:
@@ -352,19 +434,30 @@ class MainWindow:
         """Pure function to create bottom control panel with main buttons and menu"""
         bottom_control_frame = ttk.Frame(transcription_frame)
 
+        # Record button with red circle icon
         record_button = ttk.Button(
             bottom_control_frame,
-            text="🎙️ Start Recording",
+            text="🔴",
             command=self._toggle_recording,
-            width=20,
+            width=3,
             takefocus=False  # Prevent button from taking focus and being triggered by keyboard
+        )
+
+        # Transcribe button to retry transcription of selected recording
+        transcribe_button = ttk.Button(
+            bottom_control_frame,
+            text="📝 Transcribe",
+            command=self._transcribe_selected,
+            state=tk.DISABLED,
+            width=12
         )
 
         copy_selected_button = ttk.Button(
             bottom_control_frame,
-            text="📋 Copy Selected",
+            text="📋 Copy",
             command=self._copy_selected_transcription,
-            state=tk.DISABLED
+            state=tk.DISABLED,
+            width=8
         )
 
         menu_button = ttk.Button(
@@ -381,6 +474,7 @@ class MainWindow:
         return {
             'bottom_control_frame': bottom_control_frame,
             'record_button': record_button,
+            'transcribe_button': transcribe_button,
             'copy_selected_button': copy_selected_button,
             'menu_button': menu_button,
             'connection_indicator': connection_indicator,
@@ -548,7 +642,7 @@ class MainWindow:
         """Copy selected transcription to clipboard using functional composition"""
         result = (
             MainWindow._extract_selected_index(self.history_listbox.curselection())
-            .flat_map(lambda selected_index: 
+            .flat_map(lambda selected_index:
                 MainWindow._calculate_history_index(selected_index, len(self.transcription_history))
                 .flat_map(lambda history_index:
                     MainWindow._extract_text_from_history(self.transcription_history, history_index)
@@ -562,7 +656,7 @@ class MainWindow:
                 )
             )
         )
-        
+
         if result.is_success():
             self._show_copy_confirmation()
         else:
@@ -571,6 +665,77 @@ class MainWindow:
                 messagebox.showwarning("No Selection", "Please select a transcription to copy.")
             else:
                 logger.error(f"Copy operation failed: {error_msg}")
+
+    def _transcribe_selected(self) -> None:
+        """Transcribe selected recording"""
+        # Get selected index
+        selection = self.history_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a recording to transcribe.")
+            return
+
+        selected_index = selection[0]
+        history_index = len(self.transcription_history) - 1 - selected_index
+
+        if history_index < 0 or history_index >= len(self.transcription_history):
+            logger.error(f"Invalid history index: {history_index}")
+            return
+
+        entry = self.transcription_history[history_index]
+        recording_id = entry.get('recording_id')
+
+        if not recording_id:
+            messagebox.showwarning("No Recording", "Selected entry has no associated recording.")
+            return
+
+        # Load recording from storage
+        recording_data_result = self.recording_storage.get_recording_data(recording_id)
+        if recording_data_result.is_failure():
+            logger.error(f"Failed to load recording: {recording_data_result.error}")
+            messagebox.showerror("Load Error", f"Failed to load recording: {recording_data_result.error}")
+            return
+
+        audio_data = recording_data_result.value
+
+        # Set current_recording_id so transcription updates the right entry
+        self.current_recording_id = recording_id
+
+        # Send for transcription via the transcription client
+        logger.info(f"Requesting transcription for recording {recording_id}")
+
+        # Publish audio captured event to trigger transcription
+        try:
+            from shared.events import AudioCapturedEvent
+            from client.pipeline.audio_pipeline import AudioData
+
+            # Get recording info
+            recording_result = self.recording_storage.get_recording(recording_id)
+            if recording_result.is_failure():
+                raise Exception(f"Failed to get recording info: {recording_result.error}")
+
+            recording = recording_result.value
+
+            # Create AudioData and publish through voice client app's transcription flow
+            # We'll need to trigger transcription through the app
+            # For now, show processing state
+            self._update_recording_state("processing")
+
+            # Publish audio captured event
+            loop = asyncio.get_event_loop()
+            event = AudioCapturedEvent(
+                audio_data=audio_data,
+                duration_seconds=recording.duration_seconds,
+                format=recording.format,
+                source="gui_retry"
+            )
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(self.event_bus.publish(event)))
+
+            logger.info("Transcription request published")
+
+        except Exception as e:
+            logger.error(f"Failed to request transcription: {e}")
+            messagebox.showerror("Transcription Error", f"Failed to request transcription: {e}")
+            self._update_recording_state("ready")
     
     def _show_full_history(self) -> None:
         """Show full history window"""
@@ -833,6 +998,15 @@ class MainWindow:
     def destroy(self) -> None:
         """Destroy the window and cleanup"""
         self.is_running = False
+
+        # Cleanup recordings
+        if self.recording_storage:
+            cleanup_result = self.recording_storage.cleanup()
+            if cleanup_result.is_success():
+                logger.info(f"Cleaned up {cleanup_result.value} recording files")
+            else:
+                logger.warning(f"Failed to cleanup recordings: {cleanup_result.error}")
+
         if self.root:
             self.root.destroy()
             self.root = None
