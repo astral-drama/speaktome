@@ -313,9 +313,8 @@ class MainWindow:
         display_text = f"[{transcription_entry['datetime']}] Recorded (not transcribed)"
         self.history_listbox.insert(0, display_text)
 
-        # Enable transcribe button
-        if hasattr(self, 'transcribe_button'):
-            self.transcribe_button.config(state=tk.NORMAL)
+        # Don't auto-enable transcribe button - let selection handler do it
+        # This prevents confusion when entry is added but not selected
 
         logger.info(f"Added recorded entry for recording {recording_id}")
 
@@ -358,10 +357,8 @@ class MainWindow:
             display_text = f"[{transcription_entry['datetime']}] {text[:80]}{'...' if len(text) > 80 else ''}"
             self.history_listbox.insert(0, display_text)
 
-        # Enable buttons
-        self.copy_selected_button.config(state=tk.NORMAL)
-        if hasattr(self, 'transcribe_button'):
-            self.transcribe_button.config(state=tk.NORMAL)
+        # Don't auto-enable buttons - let selection handler manage them
+        # This provides consistent behavior
 
         # Add history window entry
         if hasattr(self, 'history_window') and self.history_window:
@@ -380,6 +377,9 @@ class MainWindow:
 
         # Reset recording state so button is clickable again
         self._update_recording_state("ready")
+
+        # Clear current_recording_id to prevent stale state
+        self.current_recording_id = None
 
         # Schedule automatic reconnection attempt after 3 seconds
         if self.root and self.is_running:
@@ -675,6 +675,11 @@ class MainWindow:
 
     def _transcribe_selected(self) -> None:
         """Transcribe selected recording"""
+        # Don't allow transcription while already processing
+        if self.recording_state == "processing" or self.recording_state == "recording":
+            messagebox.showinfo("Busy", "Please wait for current operation to complete.")
+            return
+
         # Get selected index
         selection = self.history_listbox.curselection()
         if not selection:
@@ -689,10 +694,21 @@ class MainWindow:
             return
 
         entry = self.transcription_history[history_index]
+
+        # Check if entry is already transcribed
+        if entry.get('status') == 'transcribed':
+            messagebox.showinfo("Already Transcribed", "This entry has already been transcribed.")
+            return
+
         recording_id = entry.get('recording_id')
 
         if not recording_id:
             messagebox.showwarning("No Recording", "Selected entry has no associated recording.")
+            return
+
+        # Check status is "recorded"
+        if entry.get('status') != 'recorded':
+            messagebox.showwarning("Cannot Transcribe", "Only recorded entries can be transcribed.")
             return
 
         # Load recording from storage
@@ -773,9 +789,25 @@ class MainWindow:
         """Handle history listbox selection"""
         selection = self.history_listbox.curselection()
         if selection:
+            # Enable copy button
             self.copy_selected_button.config(state=tk.NORMAL)
+
+            # Enable transcribe button only for "recorded" status entries
+            selected_index = selection[0]
+            history_index = len(self.transcription_history) - 1 - selected_index
+
+            if 0 <= history_index < len(self.transcription_history):
+                entry = self.transcription_history[history_index]
+                # Only enable transcribe for recorded (not transcribed) entries
+                if entry.get('status') == 'recorded' and entry.get('recording_id'):
+                    self.transcribe_button.config(state=tk.NORMAL)
+                else:
+                    self.transcribe_button.config(state=tk.DISABLED)
+            else:
+                self.transcribe_button.config(state=tk.DISABLED)
         else:
             self.copy_selected_button.config(state=tk.DISABLED)
+            self.transcribe_button.config(state=tk.DISABLED)
     
     def _show_settings(self) -> None:
         """Show settings window"""
