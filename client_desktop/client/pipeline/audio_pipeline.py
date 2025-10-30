@@ -163,8 +163,8 @@ class AudioRecordingStage(PipelineStage):
 
 class AudioValidationStage(PipelineStage):
     """Pipeline stage for audio validation"""
-    
-    def __init__(self, min_duration: float = 0.1, max_duration: float = 300.0, min_size: int = 1000):
+
+    def __init__(self, min_duration: float = 0.1, max_duration: float = 1800.0, min_size: int = 1000):
         self.min_duration = min_duration
         self.max_duration = max_duration
         self.min_size = min_size

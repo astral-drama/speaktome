@@ -163,7 +163,7 @@ async def startup_event():
     logger.info("✅ WebSocket manager initialized")
 
     # Initialize audio validator
-    audio_validator = create_audio_validator(max_size_mb=10.0)
+    audio_validator = create_audio_validator(max_size_mb=60.0)
     container.register_instance(type(audio_validator), audio_validator)
     logger.info("✅ Audio validator configured")
 
