@@ -941,7 +941,8 @@ def main():
         host="0.0.0.0",  # Allow external connections from your MacBook
         port=8000,
         reload=False,  # Disable reload for stability
-        log_level="info"
+        log_level="info",
+        ws_max_size=67108864  # 64MB max WebSocket message size (for 30-min recordings)
     )
 
 if __name__ == "__main__":
